@@ -15,6 +15,12 @@ const options: ts.CompilerOptions = {
   lib: ["lib.es2022.d.ts", "lib.dom.d.ts", "lib.dom.iterable.d.ts"],
 };
 
+const testLibraries = [
+  "/cookbook-node-types/test.d.ts",
+  "/cookbook-node-types/assert.d.ts",
+  "/cookbook-node-types/assert/strict.d.ts",
+];
+
 let cachedLibraries: Map<string, ts.SourceFile>;
 
 function loadLibraries() {
@@ -71,7 +77,11 @@ export function checkRecipeTypes(sources: RecipeSources, limit: number): string[
       });
     },
   };
-  const program = ts.createProgram([...files.keys()], { ...options, skipLibCheck: true }, host);
+  const roots = Array.from(files.keys());
+  if (sources.tests !== undefined) {
+    roots.push(...testLibraries);
+  }
+  const program = ts.createProgram(roots, { ...options, skipLibCheck: true }, host);
   const diagnostics = ts
     .getPreEmitDiagnostics(program)
     .filter((entry) => entry.category === ts.DiagnosticCategory.Error);

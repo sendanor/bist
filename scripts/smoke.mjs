@@ -47,6 +47,24 @@ async function tool(name, args, user = "author") {
   assert.equal(result?.isError, undefined, result?.content[0]?.text);
   return JSON.parse(result.content[0].text);
 }
+/**
+ * Execute repository-owned recipe fixtures from the files retrieved through the Worker.
+ * @param files Known trusted source and test files.
+ */
+async function verifyRecipeTests(files) {
+  const directory = await mkdtemp(join(tmpdir(), "bist-repository-recipe-"));
+  try {
+    await writeFile(join(directory, "package.json"), '{"type":"module"}');
+    await writeFile(join(directory, "source.ts"), files.source);
+    await writeFile(join(directory, "recipe.test.ts"), files.tests);
+    execFileSync(process.execPath, ["--test", join(directory, "recipe.test.ts")], {
+      cwd: directory,
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 const tokenizer = getEncoding("o200k_base");
 const measure = (result) => {
   const text = JSON.stringify(result);
@@ -325,6 +343,39 @@ export function Panel(label: string) {
   const badTypes = { source: 'export const value: number = "wrong";' };
   const warnedTypes = await (await submit("type-warning", badTypes)).json();
   assert.match(warnedTypes.warnings.join("\n"), /source:1:14.*TS2322/);
+  const nativeTestPolicy = {
+    ...settings.policy,
+    quality: { ...settings.policy.quality, typeCheck: "error" },
+  };
+  assert.equal((await dispatch("/api/settings", "maintainer", nativeTestPolicy)).status, 200);
+  const guardRecipe = {
+    source:
+      "export function hasFields(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null; }",
+    tests: `import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { hasFields } from "./source.ts";
+
+describe("hasFields", () => {
+  it("narrows a value after an assertion", () => {
+    const input: unknown = { label: "Cookbook" };
+    assert.ok(hasFields(input));
+    assert.equal(input.label, "Cookbook");
+  });
+});
+`,
+  };
+  const validTests = await submit("native-test-fixture", guardRecipe);
+  assert.equal(validTests.status, 201);
+  const savedTests = await validTests.json();
+  const testSnapshot = await tool("get_recipe", { slug: savedTests.slug, revision: savedTests.id });
+  await verifyRecipeTests(testSnapshot.files);
+  const invalidTests = await submit("native-test-type-error", {
+    ...guardRecipe,
+    tests: 'import { it } from "node:test"; it(123, () => {});',
+  });
+  assert.equal(invalidTests.status, 400);
+  assert.match((await invalidTests.json()).error, /TS2769/);
+
   const strictPolicy = {
     ...settings.policy,
     quality: { ...settings.policy.quality, typeCheck: "error", warningsAsErrors: true },
@@ -371,15 +422,7 @@ export function Panel(label: string) {
       revision: revision.id,
       parts: ["source", "tests"],
     });
-    const directory = await mkdtemp(join(tmpdir(), "bist-repository-recipe-"));
-    try {
-      await writeFile(join(directory, "package.json"), '{"type":"module"}');
-      await writeFile(join(directory, "source.ts"), stored.files.source);
-      await writeFile(join(directory, "recipe.test.ts"), stored.files.tests);
-      execFileSync(process.execPath, [join(directory, "recipe.test.ts")], { cwd: directory });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    await verifyRecipeTests(stored.files);
   }
 
   const allRules = Object.fromEntries(

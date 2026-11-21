@@ -17,3 +17,8 @@ asks the author before saving. MCP callers can acknowledge it with `allowDuplica
 Error blocks the submission. The defaults block duplicate code and warn about duplicate prose.
 Checks look at the author's active revisions and published recipes. Older revisions are indexed
 in batches on submission. Retry if indexing is still in progress.
+
+A recipe's test part can import `describe` and `it` from Node.js 24's built-in `node:test` and use `node:assert/strict` for assertions.
+Save the source as `source.ts` and the tests as `recipe.test.ts`, then run
+`node --test recipe.test.ts`. Bist type-checks the test and assertion APIs using the pinned
+Node declarations. Recipe tests run in the consumer's environment.

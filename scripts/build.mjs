@@ -7,7 +7,9 @@ import { assertPublicBundle } from "./public-bundle.mjs";
 const english = JSON.parse(await readFile("src/locales/en.json", "utf8"));
 const htmlEscapes = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
-const compilerDir = dirname(createRequire(import.meta.url).resolve("typescript"));
+const resolve = createRequire(import.meta.url).resolve;
+const compilerDir = dirname(resolve("typescript"));
+const nodeTypesDir = dirname(resolve("@types/node/package.json"));
 const standardLibraries = {};
 for (const file of (await readdir(compilerDir)).sort()) {
   if (
@@ -17,6 +19,13 @@ for (const file of (await readdir(compilerDir)).sort()) {
   ) {
     standardLibraries["/" + file] = await readFile(join(compilerDir, file), "utf8");
   }
+}
+// Only the built-in test and assertion declarations are available to recipe code.
+for (const file of ["test.d.ts", "assert.d.ts", "assert/strict.d.ts"]) {
+  standardLibraries["/cookbook-node-types/" + file] = await readFile(
+    join(nodeTypesDir, file),
+    "utf8",
+  );
 }
 await mkdir("dist/.openai", { recursive: true });
 try {
