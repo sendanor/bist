@@ -83,6 +83,10 @@ runnable MCP request.
 Maintainers configure formatting, lint, type, CSS, and duplicate checks in **Settings → Code policy**.
 See the [quality policy](QUALITY.md) for defaults, configurable checks, and supported inputs.
 
+On a fresh instance, connecting an OpenAI key and model enables submission review for all
+six file types. To customize the rules or opt out before connecting, open **Settings → LLM review**.
+See the [default review rules and severities](docs/recipe-workflow.md#configure-llm-review).
+
 The included hosting configuration targets ChatGPT Sites and uses a Cloudflare Worker with a
 D1 database binding named `DB`. To prepare an instance-specific configuration, copy
 [the example manifest](.openai/hosting.example.json) to `.openai/hosting.json` and set its

@@ -121,12 +121,28 @@ then start a new Codex session. [Codex skill installation](https://developers.op
 ## Configure LLM review
 
 **Settings → LLM review** controls the review model, reasoning effort, and instructions
-for each recipe file type. Choose **Warn** to let the author acknowledge a finding
-and continue, or **Block** to require a correction. The review page shows acknowledged
-warnings for the saved revision. The check sends only the configured new or changed
-file content to OpenAI. Reading a recipe or editing only its metadata makes no review
-request. With review enabled, submissions that require it fail when the provider cannot
-run the check.
+for each recipe file type. A fresh instance shows the following rules. Review starts
+when a maintainer first finishes connecting an OpenAI key and an Assistant model.
+To opt out, save **Enable LLM review** unchecked before completing setup. Bist preserves
+saved policies, including individual rules set to **Off**.
+
+| File type          | On a finding | What reviewers look for                                                                                                          |
+| ------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Documentation      | Warn         | A README's first usable result, missing prerequisites or contradictory examples. Guides, licenses and templates can stand alone. |
+| Public interface   | Block        | Infrastructure leaking into a public contract, unchecked return types or missing JSDoc for named callables.                      |
+| Source             | Block        | Demonstrable behavior or architecture defects, unsafe input handling or missing JSDoc for named callables.                       |
+| Tests              | Warn         | Assertions that miss a regression, unawaited checks and uncontrolled external state.                                             |
+| Stylesheet         | Warn         | Class naming, loss of keyboard focus or rules that break narrow layouts or unrelated components.                                 |
+| Agent instructions | Block        | Directions to disclose credentials, bypass approvals or perform unauthorized destructive work, or conflicting mandatory steps.   |
+
+**Warn** lets the author acknowledge a finding and continue. Reviewers see acknowledged
+warnings on the revision. **Block** requires a correction. Each instruction asks for
+evidence in the submitted file and an actionable fix. Optional files can be omitted.
+
+By default, review uses the Assistant model and its model-specific default reasoning effort.
+The check sends only new or changed files covered by enabled rules to OpenAI. Reading
+a recipe or editing only its metadata makes no review request. Once review is enabled,
+submissions that require it fail if the provider is unavailable or the key is removed.
 
 Optionally enter a public MCP reference query under **LLM review**. Enable OpenAI Docs
 or Context7 in **Assistant add-ons** so the model can look up that reference when it

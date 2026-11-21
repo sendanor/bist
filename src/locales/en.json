@@ -142,6 +142,7 @@
   "openai-reasoning-effort": "Reasoning effort",
   "openai-remove": "Remove API key",
   "openai-remove-help": "The assistant will stop using this key. You can enter a replacement in Settings.",
+  "openai-review-setup": "The first time you connect a key and model, Bist enables submission review and sends new or changed recipe files to OpenAI. To choose a different policy, save your review settings before connecting.",
   "openai-removed": "OpenAI API key removed.",
   "openai-save": "Save API key",
   "openai-save-model": "Save model",

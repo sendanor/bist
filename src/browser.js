@@ -1960,6 +1960,14 @@ function openAiSettingsForm(settings) {
       },
     },
     el("h2", {}, t("openai-api-key")),
+    !settings.configured &&
+      el(
+        "p",
+        { className: "muted" },
+        t("openai-review-setup"),
+        " ",
+        el("a", { href: "/settings/llm-review" }, t("llm-review-settings")),
+      ),
     el(
       "p",
       { id: "openai-key-permissions", className: "muted" },
@@ -2597,7 +2605,7 @@ async function llmReviewForm() {
     const fieldset = field(
       "instruction",
       t("llm-review-instruction"),
-      { maxlength: 2000, rows: 2 },
+      { maxlength: 2000, rows: 5, className: "review-instruction" },
       policy.rules[part]?.instruction ?? "",
       true,
     );

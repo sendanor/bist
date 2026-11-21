@@ -558,6 +558,10 @@ textarea {
   min-height: 95px;
 }
 
+.review-instruction {
+  field-sizing: content;
+}
+
 textarea.code-input {
   font:
     0.9rem/1.6 ui-monospace,

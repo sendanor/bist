@@ -4,10 +4,10 @@
 
 In the OpenAI project's API key settings, choose **Restricted** and grant these permissions.
 
-| Permission                | Endpoint             | Use in Bist                                                                                  |
-| ------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
-| **List models · Read**    | `GET /v1/models`     | Populate the model picker and check whether the selected model appears in the key's catalog. |
-| **Responses API · Write** | `POST /v1/responses` | Answer questions about published recipes using Bist's read-only lookup functions.            |
+| Permission                | Endpoint             | Use in Bist                                                                                              |
+| ------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------- |
+| **List models · Read**    | `GET /v1/models`     | Populate the model picker and check whether the selected model appears in the key's catalog.             |
+| **Responses API · Write** | `POST /v1/responses` | Answer questions about published recipes and check new submissions against the instance's review policy. |
 
 Set unused key permissions to **None**. If your organization uses custom project roles,
 check that the key's identity can make model requests through **Model capabilities ·
@@ -15,8 +15,10 @@ Request**. This is a project role permission. A model's presence in the list con
 catalog access. Ask a question in Bist to verify inference and function calling.
 [OpenAI permission reference](https://developers.openai.com/api/docs/guides/rbac)
 
-The Worker holds the API key and calls OpenAI. It sends the question and selected published
-recipe data as needed. It sets `store: false` on Responses requests. OpenAI's API data
+The Worker holds the API key and calls OpenAI. For chat, it sends the question and selected published
+recipe data as needed. Submission review sends new or changed files covered by the
+[instance's review policy](recipe-workflow.md#configure-llm-review). The Worker sets
+`store: false` on Responses requests. OpenAI's API data
 controls explain which retention policies still apply.
 [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data)
 
