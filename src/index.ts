@@ -2,7 +2,7 @@ import { isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
 import { docsMcpEnabled, readMcpSettings, saveDocsMcp, saveMcpSettings } from "./mcp-settings.ts";
-import { searchOpenAiDocs } from "./openai-docs-mcp.ts";
+import { searchContext7, searchOpenAiDocs } from "./openai-docs-mcp.ts";
 import { Cookbook, RequestError, str, type Database, type Input } from "./store";
 import {
   fetchOpenAiModelCatalog,
@@ -19,6 +19,8 @@ import {
 import html from "./page.html";
 import css from "./styles.css";
 import browser from "cookbook:browser";
+import caveman from "./skills/caveman/SKILL.md";
+import suomenkieli from "./skills/suomenkieli/SKILL.md";
 
 interface Env {
   DB: Database;
@@ -34,6 +36,11 @@ const openAiPaths = new Set([
 const mcpSettingsPath = "/api/settings/mcp";
 const mcpCheckPath = mcpSettingsPath + "/check";
 const docsMcpPath = mcpSettingsPath + "/openai-docs";
+const context7Path = mcpSettingsPath + "/context7";
+const skills = new Map([
+  ["caveman", caveman],
+  ["suomenkieli", suomenkieli],
+]);
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -155,6 +162,39 @@ function json(data: unknown, status = 200) {
 function asset(content: string, type: string) {
   return new Response(content, {
     headers: { ...headers, "content-type": type + "; charset=utf-8" },
+  });
+}
+
+/**
+ * Download a built-in skill or package the prose of a visible published recipe.
+ * @param input Requested built-in name or the exact recipe slug and revision.
+ * @param cookbook Recipe service scoped to the current viewer.
+ * @throws {RequestError} When the requested skill or published prose is unavailable.
+ */
+async function downloadSkill(input: Input, cookbook: Cookbook) {
+  const name = str(input.name, "skill name", 64, true);
+  let markdown = skills.get(name);
+  if (!name) {
+    const recipe = await cookbook.get({
+      slug: input.slug,
+      revision: input.revision,
+      parts: ["instructions", "documentation"],
+    });
+    const prose = recipe.files.instructions || recipe.files.documentation;
+    if (recipe.state === "published" && prose) {
+      const content = prose.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "").trim();
+      markdown = `---\nname: ${recipe.slug}\ndescription: ${JSON.stringify(recipe.summary)}\n---\n\n${content}\n`;
+    }
+  }
+  if (!markdown) {
+    throw new RequestError("Skill not found.", 404);
+  }
+  return new Response(markdown, {
+    headers: {
+      ...headers,
+      "content-type": "text/markdown; charset=utf-8",
+      "content-disposition": 'attachment; filename="SKILL.md"',
+    },
   });
 }
 
@@ -382,8 +422,23 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   const input = await readJsonObject(request, 16_000);
   const question = str(input.question, "a question", 4_000);
   const docsQuery = str(input.docsQuery, "public documentation search terms", 160, true);
-  if (docsQuery && !(await docsMcpEnabled(env.DB))) {
-    throw new RequestError("OpenAI Docs search is disabled.", 403);
+  const libraryId = str(input.libraryId, "Context7 library ID", 160, true);
+  const skillName = str(input.skill, "skill name", 64, true);
+  const skill = skills.get(skillName);
+  if (skillName && !skill) {
+    throw new RequestError("Choose a supported skill.");
+  }
+  const context7 = Boolean(libraryId);
+  if (context7 && (!docsQuery || !/^\/[\w.-]+\/[\w.-]+(?:\/[\w.+-]+)?$/u.test(libraryId))) {
+    throw new RequestError(
+      "Enter public search terms and a Context7 library ID such as /react/react.",
+    );
+  }
+  if (docsQuery && !(await docsMcpEnabled(env.DB, context7))) {
+    throw new RequestError(
+      context7 ? "Context7 search is disabled." : "OpenAI Docs search is disabled.",
+      403,
+    );
   }
   const config = await openAiConnection(env, cookbook, "ask");
   const sources = new Map<string, { slug: string; id: string; title: string }>();
@@ -393,11 +448,17 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
    * Look up the separately entered public terms once, checking the saved policy during the call.
    */
   async function searchDocs() {
-    const unavailable = { error: "OpenAI Docs search is unavailable." };
+    const unavailable = { error: "Documentation search is unavailable." };
     if (searchedDocs) {
       return unavailable;
     }
     searchedDocs = true;
+    if (context7) {
+      const excerpt = await searchContext7(docsQuery, libraryId, () =>
+        docsMcpEnabled(env.DB, true),
+      );
+      return excerpt ? { excerpt } : unavailable;
+    }
     const hits = await searchOpenAiDocs(docsQuery, () => docsMcpEnabled(env.DB));
     if (!hits) {
       return unavailable;
@@ -406,7 +467,7 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
     return { hits };
   }
   const answer = await runOpenAiAssistant(
-    { ...config, searchDocs: docsQuery ? searchDocs : undefined },
+    { ...config, context7, skill, searchDocs: docsQuery ? searchDocs : undefined },
     question,
     async (name, value) => {
       if (name === "search_recipes") {
@@ -476,7 +537,7 @@ export default {
       if (
         !maintainer &&
         (openAiPaths.has(url.pathname) ||
-          [mcpSettingsPath, mcpCheckPath, docsMcpPath].includes(url.pathname))
+          [mcpSettingsPath, mcpCheckPath, docsMcpPath, context7Path].includes(url.pathname))
       ) {
         throw new RequestError("Maintainer access required.", 403);
       }
@@ -490,7 +551,12 @@ export default {
             return json({ maintainer });
           case "/api/assistant": {
             const { model, configured } = await openAiStatus(env, cookbook);
-            return json({ model, configured, docsSearch: await docsMcpEnabled(env.DB) });
+            return json({
+              model,
+              configured,
+              docsSearch: await docsMcpEnabled(env.DB),
+              context7Search: await docsMcpEnabled(env.DB, true),
+            });
           }
           case "/api/settings/openai":
             return json(await openAiStatus(env, cookbook));
@@ -500,6 +566,10 @@ export default {
             return json({ tools: (await currentMcpTools(env.DB)).map(({ name }) => name) });
           case docsMcpPath:
             return json({ enabled: await docsMcpEnabled(env.DB) });
+          case context7Path:
+            return json({ enabled: await docsMcpEnabled(env.DB, true) });
+          case "/api/skill":
+            return await downloadSkill(input, cookbook);
           case "/api/assistant/models": {
             const { key } = await openAiConnection(env, cookbook, "catalog");
             return json(await fetchOpenAiModelCatalog(key));
@@ -531,6 +601,9 @@ export default {
         }
         if (url.pathname === docsMcpPath) {
           return json(await saveDocsMcp(env.DB, await body(request)));
+        }
+        if (url.pathname === context7Path) {
+          return json(await saveDocsMcp(env.DB, await body(request), true));
         }
         if (url.pathname === "/api/settings/openai/remove-key") {
           await cookbook.reserveOpenAiRequest("settings");

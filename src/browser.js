@@ -415,6 +415,13 @@ async function listingPage(section) {
   };
   return [
     title(labels[section], descriptions[section]),
+    section === "library" &&
+      el(
+        "div",
+        { className: "actions" },
+        buttonLink(t("download-finnish-skill"), "/api/skill?name=suomenkieli"),
+        buttonLink(t("download-caveman-skill"), "/api/skill?name=caveman"),
+      ),
     listingForm(section, filters, tags),
     items.length
       ? list(items, section, filters)
@@ -1637,6 +1644,12 @@ async function recipePage(section, slug, revision) {
           { className: "recipe-byline" },
           chip(stateLabels[recipe.state] ?? recipe.state, "state-" + recipe.state),
           ...recipe.tags.map((tag) => tagLink(tag, section, filters)),
+          recipe.state === "published" &&
+            (recipe.files.instructions || recipe.files.documentation) &&
+            buttonLink(
+              t("download-skill"),
+              "/api/skill?" + new URLSearchParams({ slug, revision: recipe.id }),
+            ),
         ),
       ),
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
@@ -2035,7 +2048,7 @@ async function codePolicyPage() {
 
 /** Build the maintainer's published-recipe assistant and its model access check. */
 async function assistantPage() {
-  const { configured, model, docsSearch } = await api("assistant");
+  const { configured, model, docsSearch, context7Search } = await api("assistant");
   const heading = title(t("assistant"), t("assistant-description"));
   if (!configured) {
     return [
@@ -2097,6 +2110,8 @@ async function assistantPage() {
             const { answer, sources, docsSources } = await api("assistant", {
               question,
               docsQuery: data.get("docsQuery")?.trim(),
+              libraryId: data.get("libraryId")?.trim(),
+              skill: data.get("skill"),
             });
             const links = [
               ...sources.map(({ slug, id, title }) => ({
@@ -2129,13 +2144,30 @@ async function assistantPage() {
         "",
         true,
       ),
-      docsSearch &&
+      el(
+        "label",
+        {},
+        t("assistant-skill"),
+        el(
+          "select",
+          { name: "skill" },
+          el("option", { value: "" }, t("assistant-skill-default")),
+          el("option", { value: "caveman" }, t("assistant-skill-caveman")),
+          el("option", { value: "suomenkieli" }, t("assistant-skill-finnish")),
+        ),
+      ),
+      (docsSearch || context7Search) &&
         field("docsQuery", t("assistant-docs-query"), {
           maxlength: 160,
           "aria-describedby": "assistant-docs-help",
         }),
-      docsSearch &&
+      (docsSearch || context7Search) &&
         el("p", { id: "assistant-docs-help", className: "muted" }, t("assistant-docs-help")),
+      context7Search &&
+        field("libraryId", t("assistant-context7-library"), {
+          maxlength: 160,
+          placeholder: t("assistant-context7-example"),
+        }),
       el("p", { className: "muted" }, t("assistant-data-use")),
       el("div", { className: "actions" }, ask),
     ),
@@ -2219,13 +2251,21 @@ async function mcpSettingsForm() {
   );
 }
 
-/** Build the opt-in setting for the assistant's public documentation tool. */
-async function assistantMcpForm() {
-  const { enabled } = await api("settings/mcp/openai-docs");
+/**
+ * Build an independent opt-in form for a public documentation MCP provider.
+ * @param context7 Whether to configure Context7 instead of OpenAI Docs.
+ */
+async function assistantMcpForm(context7 = false) {
+  const path = context7 ? "settings/mcp/context7" : "settings/mcp/openai-docs";
+  const { enabled } = await api(path);
   const control = el("input", { type: "checkbox", name: "enabled" });
   control.checked = enabled;
   const status = el("p", { role: "status", className: "muted" });
-  const save = el("button", { className: "primary", type: "submit" }, t("mcp-save-docs"));
+  const save = el(
+    "button",
+    { className: "primary", type: "submit" },
+    context7 ? t("mcp-save-context7") : t("mcp-save-docs"),
+  );
   return el(
     "form",
     {
@@ -2239,7 +2279,7 @@ async function assistantMcpForm() {
         save.disabled = true;
         status.textContent = "";
         try {
-          await api("settings/mcp/openai-docs", { enabled: control.checked });
+          await api(path, { enabled: control.checked });
           status.textContent = t("mcp-docs-saved");
         } catch (error) {
           status.textContent = error.message;
@@ -2248,9 +2288,18 @@ async function assistantMcpForm() {
         }
       },
     },
-    el("h2", {}, t("mcp-assistant-connection")),
-    el("p", { className: "muted" }, t("mcp-assistant-docs-help")),
-    el("label", { className: "setting-toggle" }, t("mcp-assistant-docs"), control),
+    el("h2", {}, context7 ? t("mcp-context7-connection") : t("mcp-assistant-connection")),
+    el(
+      "p",
+      { className: "muted" },
+      context7 ? t("mcp-context7-help") : t("mcp-assistant-docs-help"),
+    ),
+    el(
+      "label",
+      { className: "setting-toggle" },
+      context7 ? t("mcp-context7-enable") : t("mcp-assistant-docs"),
+      control,
+    ),
     el("div", { className: "actions" }, save, status),
   );
 }
@@ -2292,6 +2341,7 @@ async function settingsPage(page) {
       nav,
       await mcpSettingsForm(),
       await assistantMcpForm(),
+      await assistantMcpForm(true),
     ];
   }
   return [title(t("settings")), nav];

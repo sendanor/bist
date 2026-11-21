@@ -140,6 +140,7 @@ try {
   await db.prepare(await readFile("drizzle/0010_recipe_file_names.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0011_mcp_settings.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0012_assistant_docs_mcp.sql", "utf8")).run();
+  await db.prepare(await readFile("drizzle/0013_context7.sql", "utf8")).run();
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -153,6 +154,14 @@ try {
   assert.equal((await dispatch("/api/search", null)).status, 401);
   const mcpPath = "/api/settings/mcp";
   const docsMcpPath = mcpPath + "/openai-docs";
+  const context7Path = mcpPath + "/context7";
+  const finnishSkill = await dispatch("/api/skill?name=suomenkieli", "author");
+  assert.equal(finnishSkill.headers.get("content-disposition"), 'attachment; filename="SKILL.md"');
+  assert.match(await finnishSkill.text(), /^---\nname: suomenkieli/u);
+  assert.equal((await dispatch("/api/skill?name=unknown", "author")).status, 404);
+  assert.equal((await dispatch(context7Path, "author", { enabled: true })).status, 403);
+  assert.deepEqual(await (await dispatch(context7Path, "maintainer")).json(), { enabled: false });
+
   assert.deepEqual(await (await dispatch(docsMcpPath, "maintainer")).json(), { enabled: false });
   assert.equal((await dispatch(docsMcpPath, "author", { enabled: true })).status, 403);
   const mcpSettings = await (await dispatch(mcpPath, "maintainer")).json();
@@ -219,6 +228,7 @@ try {
   assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
     configured: false,
     docsSearch: false,
+    context7Search: false,
     model: null,
   });
   assert.equal(
@@ -1323,10 +1333,13 @@ describe("hasFields", () => {
      */
     outboundService: async (request) => {
       const url = new URL(request.url);
-      if (url.href === "https://developers.openai.com/mcp") {
+      const context7 = url.href === "https://mcp.context7.com/mcp";
+      if (url.href === "https://developers.openai.com/mcp" || context7) {
         assert.equal(request.headers.get("authorization"), null);
         const { method, id, params } = await request.json();
-        docsMethods.push(method);
+        if (!context7) {
+          docsMethods.push(method);
+        }
         if (method === "initialize") {
           return Response.json({
             jsonrpc: "2.0",
@@ -1338,6 +1351,17 @@ describe("hasFields", () => {
           return new Response(null, { status: 202 });
         }
         assert.equal(method, "tools/call");
+        if (context7) {
+          assert.deepEqual(params, {
+            name: "query-docs",
+            arguments: { query: "React state", libraryId: "/react/react" },
+          });
+          return Response.json({
+            jsonrpc: "2.0",
+            id,
+            result: { content: [{ type: "text", text: "React documentation excerpt" }] },
+          });
+        }
         assert.deepEqual(params, {
           name: "search_openai_docs",
           arguments: { query: "Responses streaming", limit: 3 },
@@ -1374,6 +1398,23 @@ describe("hasFields", () => {
       assert.equal(body.model, model);
       assert.equal(body.store, false);
       assert.equal(body.parallel_tool_calls, false);
+      if (body.tools.some(({ name }) => name === "query_context7_docs")) {
+        assert.match(body.instructions, /# Suomen kieli/u);
+        const last = body.input.at(-1);
+        const item =
+          last.role === "user"
+            ? {
+                type: "function_call",
+                call_id: "context7",
+                name: "query_context7_docs",
+                arguments: "{}",
+              }
+            : { type: "message", content: [{ type: "output_text", text: "React-ohje löytyi." }] };
+        if (last.role !== "user") {
+          assert.deepEqual(JSON.parse(last.output), { excerpt: "React documentation excerpt" });
+        }
+        return Response.json({ status: "completed", output: [item] });
+      }
       if (body.tools.some(({ name }) => name === "search_openai_docs")) {
         assert.equal(body.tools.at(-1).strict, true);
         const last = body.input.at(-1);
@@ -1491,6 +1532,7 @@ describe("hasFields", () => {
     configured: true,
     model,
     docsSearch: false,
+    context7Search: false,
   });
   assert.deepEqual(await (await dispatch("/api/assistant/models", "maintainer")).json(), {
     status: "ready",
@@ -1524,6 +1566,35 @@ describe("hasFields", () => {
   });
   assert.deepEqual(docsMethods, ["initialize", "notifications/initialized", "tools/call"]);
   assert.equal((await dispatch(docsMcpPath, "maintainer", { enabled: false })).status, 200);
+  const contextQuestion = {
+    question: "Selitä tila.",
+    docsQuery: "React state",
+    libraryId: "/react/react",
+    skill: "suomenkieli",
+  };
+  assert.equal((await dispatch("/api/assistant", "maintainer", contextQuestion)).status, 403);
+  assert.equal((await dispatch(context7Path, "maintainer", { enabled: true })).status, 200);
+  assert.deepEqual(await (await dispatch(docsMcpPath, "maintainer")).json(), { enabled: false });
+  assert.equal(
+    (
+      await dispatch("/api/assistant", "maintainer", {
+        ...contextQuestion,
+        libraryId: "https://example.test",
+      })
+    ).status,
+    400,
+  );
+  const contextAnswer = await dispatch("/api/assistant", "maintainer", contextQuestion);
+  assert.equal(contextAnswer.status, 200);
+  assert.equal((await contextAnswer.json()).answer, "React-ohje löytyi.");
+  assert.equal((await dispatch(context7Path, "maintainer", { enabled: false })).status, 200);
+  const exportedRecipe = await dispatch("/api/skill?slug=paging-fixture-26", "reader");
+  assert.equal(exportedRecipe.status, 200);
+  assert.match(await exportedRecipe.text(), /name: paging-fixture-26[\s\S]*Unselected text\./u);
+  assert.equal(
+    (await dispatch("/api/skill?slug=paging-fixture-0&revision=" + sampleIds[0], "author")).status,
+    404,
+  );
   const limited = await dispatch("/api/assistant", "maintainer", { question: "Try again." });
   assert.equal(limited.status, 429);
   assert.doesNotMatch(await limited.text(), /Private provider failure/);

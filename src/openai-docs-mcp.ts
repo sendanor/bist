@@ -1,7 +1,8 @@
 import { isArray, isRecord, isString } from "./guards.ts";
 import { readJsonObject, readUtf8 } from "./read-json-object.ts";
 
-const endpoint = "https://developers.openai.com/mcp";
+const openAiDocsEndpoint = "https://developers.openai.com/mcp";
+const context7Endpoint = "https://mcp.context7.com/mcp";
 const protocol = "2025-11-25";
 const resultLimit = 3;
 const maxBytes = 32_000;
@@ -85,15 +86,19 @@ function docsHits(result: Record<string, unknown> | null): DocsHit[] | null {
 }
 
 /**
- * Run one public documentation lookup over Streamable HTTP.
- * @param query The exact public search terms entered separately by the maintainer.
- * @param authorized Recheck the opt-in setting before negotiation and before searching.
- * @param send Optional fetch implementation for contract tests.
+ * Call a fixed public MCP tool over Streamable HTTP without sending credentials.
+ * @param endpoint Server URL selected by the provider adapter.
+ * @param name The single approved tool for this adapter.
+ * @param args Tool arguments selected by the adapter.
+ * @param authorized Recheck the saved setting before negotiating and calling the tool.
+ * @param send Fetch implementation that dispatches requests to the public MCP endpoint.
  */
-export async function searchOpenAiDocs(
-  query: string,
+async function callDocsMcp(
+  endpoint: string,
+  name: string,
+  args: Readonly<Record<string, string | number>>,
   authorized: () => Promise<boolean>,
-  send: typeof fetch = fetch,
+  send: typeof fetch,
 ) {
   const signal = AbortSignal.timeout(6_000);
   const headers = new Headers({
@@ -144,10 +149,63 @@ export async function searchOpenAiDocs(
     const search = await post({
       method: "tools/call",
       id: 2,
-      params: { name: "search_openai_docs", arguments: { query, limit: resultLimit } },
+      params: { name, arguments: args },
     });
-    return docsHits(await reply(search, 2));
+    return await reply(search, 2);
   } catch {
     return null;
   }
+}
+
+/**
+ * Search OpenAI Docs and keep only approved public link and excerpt fields.
+ * @param query Public search terms entered by the maintainer.
+ * @param authorized Recheck the saved connection setting during the request.
+ * @param send Optional fetch implementation for tests.
+ */
+export async function searchOpenAiDocs(
+  query: string,
+  authorized: () => Promise<boolean>,
+  send: typeof fetch = fetch,
+) {
+  try {
+    return docsHits(
+      await callDocsMcp(
+        openAiDocsEndpoint,
+        "search_openai_docs",
+        { query, limit: resultLimit },
+        authorized,
+        send,
+      ),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Look up a selected public library through Context7's read-only documentation tool.
+ * @param query Public search terms entered by the maintainer.
+ * @param libraryId Exact Context7 library ID entered by the maintainer.
+ * @param authorized Recheck the saved connection setting during the request.
+ */
+export async function searchContext7(
+  query: string,
+  libraryId: string,
+  authorized: () => Promise<boolean>,
+) {
+  const result = await callDocsMcp(
+    context7Endpoint,
+    "query-docs",
+    { query, libraryId },
+    authorized,
+    fetch,
+  );
+  if (!result || result.isError === true || !isArray(result.content)) {
+    return null;
+  }
+  const content = result.content[0];
+  return isRecord(content) && content.type === "text" && isString(content.text)
+    ? content.text.slice(0, 2_500)
+    : null;
 }
