@@ -1,0 +1,49 @@
+{
+  "name": "code-cookbook",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run test:unit && npm run build && node scripts/smoke.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "npm run check:secrets && npm run format:check && npm run lint && npm run typecheck && npm run check:project && npm run build",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "lint": "eslint . && stylelint src/**/*.css",
+    "typecheck": "tsc",
+    "check:project": "node scripts/check-project.mjs",
+    "test:unit": "node --experimental-test-coverage --test-coverage-include=src/line-diff.ts --test-coverage-include=src/read-json-object.ts --test-coverage-include=src/quality/rules.js --test-coverage-lines=75 --test-coverage-branches=60 --test-coverage-functions=75 --test tests/*.test.*"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@typescript-eslint/scope-manager": "8.73.0",
+    "@typescript-eslint/visitor-keys": "8.73.0",
+    "css-tree": "3.2.1",
+    "dompurify": "3.4.18",
+    "esbuild": "0.25.12",
+    "eslint-linter-browserify": "9.39.2",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "highlight.js": "11.12.0",
+    "jsonschema": "1.5.0",
+    "marked": "17.0.6",
+    "prettier": "3.10.1",
+    "typescript": "5.9.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/css-tree": "2.3.11",
+    "@types/node": "24.19.2",
+    "@typescript-eslint/eslint-plugin": "8.73.0",
+    "@typescript-eslint/parser": "8.73.0",
+    "eslint": "9.39.2",
+    "globals": "16.5.0",
+    "js-tiktoken": "1.0.21",
+    "miniflare": "4.20260730.0",
+    "stylelint": "16.26.1",
+    "stylelint-config-standard": "39.0.1"
+  }
+}

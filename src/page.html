@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1"
+    />
+    <meta
+      name="description"
+      content="{{t:find-contribute-and-review-adaptable-typescript-recipes}}"
+    />
+    <title>{{t:code-cookbook}}</title>
+    <link
+      rel="stylesheet"
+      href="/styles.css"
+    />
+    <script
+      type="module"
+      src="/browser.js"
+    ></script>
+  </head>
+  <body>
+    <svg
+      class="icon-sprite"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <symbol
+        id="icon-book"
+        viewBox="0 0 24 24"
+      >
+        <path d="M3 4h6c2 0 3 1 3 2 0-1 1-2 3-2h6v15h-6c-2 0-3 1-3 2 0-1-1-2-3-2H3z M12 6v15" />
+      </symbol>
+      <symbol
+        id="icon-library"
+        viewBox="0 0 24 24"
+      >
+        <path d="M4 4h4v16H4z M11 4v16 M15 5l4-1 3 15-4 1z" />
+      </symbol>
+      <symbol
+        id="icon-plus"
+        viewBox="0 0 24 24"
+      >
+        <path d="M12 5v14 M5 12h14" />
+      </symbol>
+      <symbol
+        id="icon-history"
+        viewBox="0 0 24 24"
+      >
+        <path d="M3 10a9 9 0 1 1 1 7 M3 4v6h6 M12 7v5l4 2" />
+      </symbol>
+      <symbol
+        id="icon-review"
+        viewBox="0 0 24 24"
+      >
+        <path d="M8 4H5v17h14V4h-3 M9 2h6v4H9z M8 13l3 3 5-6" />
+      </symbol>
+      <symbol
+        id="icon-terminal"
+        viewBox="0 0 24 24"
+      >
+        <path d="M3 4h18v16H3z M6 8l4 4-4 4 M13 16h5" />
+      </symbol>
+      <symbol
+        id="icon-code"
+        viewBox="0 0 24 24"
+      >
+        <path d="M8 7l-5 5 5 5 M16 7l5 5-5 5 M14 4l-4 16" />
+      </symbol>
+      <symbol
+        id="icon-doc"
+        viewBox="0 0 24 24"
+      >
+        <path d="M5 3h10l4 4v14H5z M14 3v5h5 M8 12h8 M8 16h6" />
+      </symbol>
+      <symbol
+        id="icon-interface"
+        viewBox="0 0 24 24"
+      >
+        <path d="M3 3h6v6H3z M15 15h6v6h-6z M6 9v9h9" />
+      </symbol>
+      <symbol
+        id="icon-tests"
+        viewBox="0 0 24 24"
+      >
+        <path d="M9 3h6 M10 3v6L4 19q-1 2 2 2h12q3 0 2-2L14 9V3 M7 15h10" />
+      </symbol>
+      <symbol
+        id="icon-instructions"
+        viewBox="0 0 24 24"
+      >
+        <path d="M4 5h16 M4 12h16 M4 19h16 M8 3v4 M16 10v4 M10 17v4" />
+      </symbol>
+      <symbol
+        id="icon-copy"
+        viewBox="0 0 24 24"
+      >
+        <path d="M8 8h12v13H8z M16 5V2H3v15h2" />
+      </symbol>
+      <symbol
+        id="icon-wrap"
+        viewBox="0 0 24 24"
+      >
+        <path d="M3 6h18 M3 11h14a4 4 0 0 1 0 8h-5 M14 16l-3 3 3 3" />
+      </symbol>
+      <symbol
+        id="icon-diff"
+        viewBox="0 0 24 24"
+      >
+        <path d="M6 3v6 M3 6h6 M15 18h6 M4 20L20 4" />
+      </symbol>
+    </svg>
+    <a
+      href="#content"
+      class="skip"
+      >{{t:skip-to-content}}</a
+    >
+    <div class="app">
+      <aside class="rail">
+        <a
+          class="brand"
+          href="#library"
+          ><span
+            class="mark"
+            aria-hidden="true"
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <use href="#icon-book" /></svg></span
+          ><span>{{t:code-cookbook}}</span></a
+        >
+        <nav aria-label="{{t:workspace}}">
+          <a href="#library"
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <use href="#icon-library" /></svg
+            >{{t:recipe-library}}</a
+          >
+          <a href="#contribute"
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <use href="#icon-plus" /></svg
+            >{{t:contribute}}</a
+          >
+          <a href="#mine"
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <use href="#icon-history" /></svg
+            >{{t:my-revisions}}</a
+          >
+          <a
+            href="#review"
+            hidden
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <use href="#icon-review" /></svg
+            >{{t:review-queue}}</a
+          >
+          <a
+            href="#settings"
+            hidden
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+            >
+              <use href="#icon-instructions" /></svg
+            >{{t:settings}}</a
+          >
+        </nav>
+        <div class="rail-footer">
+          <svg
+            class="ui-icon"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <use href="#icon-terminal" />
+          </svg>
+          <div>{{t:mcp-tools}}<small>{{t:search-retrieve-and-submit}}</small></div>
+        </div>
+      </aside>
+      <main
+        id="content"
+        tabindex="-1"
+      >
+        <header class="top">
+          <span id="location">{{t:recipe-library}}</span
+          ><a
+            href="#contribute"
+            class="button primary"
+            ><svg
+              class="ui-icon"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <use href="#icon-plus" />
+            </svg>
+            {{t:new-recipe}}</a
+          >
+        </header>
+        <div
+          id="notice"
+          role="status"
+        ></div>
+        <div
+          class="content"
+          id="view"
+          aria-live="polite"
+        >
+          <p class="muted">{{t:loading-cookbook}}</p>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
