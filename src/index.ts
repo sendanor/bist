@@ -8,6 +8,12 @@ import {
   OpenAiError,
   runOpenAiAssistant,
 } from "./openai.ts";
+import {
+  isSettingsKey,
+  openOpenAiKey,
+  sealOpenAiKey,
+  SettingsCryptoError,
+} from "./settings-crypto.ts";
 import html from "./page.html";
 import css from "./styles.css";
 import browser from "cookbook:browser";
@@ -15,9 +21,14 @@ import browser from "cookbook:browser";
 interface Env {
   DB: Database;
   MAINTAINER_EMAILS?: string;
-  OPENAI_API_KEY?: string;
-  OPENAI_MODEL?: string;
+  SETTINGS_ENCRYPTION_KEY?: string;
 }
+const openAiPaths = new Set([
+  "/api/assistant",
+  "/api/assistant/models",
+  "/api/settings/openai",
+  "/api/settings/openai/remove-key",
+]);
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -151,7 +162,12 @@ const body = (request: Request) => readJsonObject(request, 96_000);
  * @param error The thrown value received from the handler.
  */
 function message(error: unknown) {
-  if (error instanceof RequestError || error instanceof JsonBodyError) {
+  if (
+    error instanceof RequestError ||
+    error instanceof JsonBodyError ||
+    error instanceof OpenAiError ||
+    error instanceof SettingsCryptoError
+  ) {
     return error.message;
   }
   console.error("Cookbook operation failed", error);
@@ -255,6 +271,68 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
 }
 
 /**
+ * Return connection metadata for Settings without reading or exposing ciphertext.
+ * @param env Server-only deployment bindings.
+ * @param cookbook Cookbook with the verified maintainer identity.
+ */
+async function openAiStatus(env: Env, cookbook: Cookbook) {
+  const { model, hasCredential } = await cookbook.openAiSettings();
+  const encryptionAvailable = isSettingsKey(env.SETTINGS_ENCRYPTION_KEY);
+  return {
+    model,
+    hasCredential,
+    encryptionAvailable,
+    configured: hasCredential && isOpenAiModel(model) && encryptionAvailable,
+  };
+}
+
+/**
+ * Validate the submitted configuration and save only the encrypted credential.
+ * @param request Same-origin request from the authorized maintainer.
+ * @param env Server-only deployment bindings for encryption.
+ * @param cookbook Cookbook with the verified maintainer identity.
+ * @throws {RequestError} When the model or replacement credential is invalid.
+ */
+async function saveOpenAi(request: Request, env: Env, cookbook: Cookbook) {
+  const input = await readJsonObject(request, 4_096);
+  const model = typeof input.model === "string" ? input.model.trim() : null;
+  if (!isOpenAiModel(model)) {
+    throw new RequestError("Enter a valid OpenAI model identifier.");
+  }
+  const key = input.apiKey;
+  if (
+    key !== undefined &&
+    (typeof key !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{9,511}$/u.test(key))
+  ) {
+    throw new RequestError("Enter a valid OpenAI API key.");
+  }
+  await cookbook.reserveOpenAiRequest("settings");
+  const credential =
+    key === undefined ? null : await sealOpenAiKey(env.SETTINGS_ENCRYPTION_KEY, key);
+  await cookbook.saveOpenAiSettings(model, credential);
+  return json(await openAiStatus(env, cookbook));
+}
+
+/**
+ * Open a stored credential only for a trusted, rate-limited provider operation.
+ * @param env Server-only deployment bindings for decryption.
+ * @param cookbook Cookbook with the verified maintainer identity.
+ * @param action Authorized type of OpenAI request to reserve.
+ * @throws {RequestError} When the integration has no saved credential or valid model.
+ */
+async function openAiConnection(env: Env, cookbook: Cookbook, action: "ask" | "catalog") {
+  const stored = await cookbook.readOpenAiConnection();
+  if (!stored?.credential || !isOpenAiModel(stored.model)) {
+    throw new RequestError("Configure OpenAI in Bist Settings first.", 503);
+  }
+  await cookbook.reserveOpenAiRequest(action);
+  return {
+    model: stored.model,
+    key: await openOpenAiKey(env.SETTINGS_ENCRYPTION_KEY, stored.credential),
+  };
+}
+
+/**
  * Answer with published recipe content and return links for recipes actually read.
  * @param request Authenticated request containing a single question.
  * @param env Server-only deployment bindings.
@@ -262,15 +340,11 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
  * @throws {RequestError} When the integration is unconfigured or the question is invalid.
  */
 async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
-  const key = env.OPENAI_API_KEY?.trim();
-  const model = env.OPENAI_MODEL?.trim();
-  if (!key || !isOpenAiModel(model)) {
-    throw new RequestError("Configure OpenAI in the hosted runtime before asking a question.", 503);
-  }
   const input = await readJsonObject(request, 16_000);
   const question = str(input.question, "a question", 4_000);
+  const config = await openAiConnection(env, cookbook, "ask");
   const sources = new Map<string, { slug: string; id: string; title: string }>();
-  const answer = await runOpenAiAssistant({ key, model }, question, async (name, value) => {
+  const answer = await runOpenAiAssistant(config, question, async (name, value) => {
     if (name === "search_recipes") {
       const { items } = await cookbook.search({ query: value, limit: 6 });
       return { items: items.map(({ slug, title, summary }) => ({ slug, title, summary })) };
@@ -334,10 +408,7 @@ export default {
       if (!cookbook) {
         throw new RequestError("Sign in with ChatGPT to access the cookbook.", 401);
       }
-      if (
-        (url.pathname === "/api/assistant" || url.pathname === "/api/assistant/models") &&
-        !maintainer
-      ) {
+      if (openAiPaths.has(url.pathname) && !maintainer) {
         throw new RequestError("Maintainer access required.", 403);
       }
       if (request.method === "GET") {
@@ -348,17 +419,13 @@ export default {
           case "/api/session":
             return json({ maintainer });
           case "/api/assistant": {
-            const model = env.OPENAI_MODEL?.trim();
-            return json({
-              configured: Boolean(env.OPENAI_API_KEY?.trim()) && isOpenAiModel(model),
-              model: isOpenAiModel(model) ? model : null,
-            });
+            const { model, configured } = await openAiStatus(env, cookbook);
+            return json({ model, configured });
           }
+          case "/api/settings/openai":
+            return json(await openAiStatus(env, cookbook));
           case "/api/assistant/models": {
-            const key = env.OPENAI_API_KEY?.trim();
-            if (!key) {
-              throw new RequestError("Configure OpenAI in the hosted runtime first.", 503);
-            }
+            const { key } = await openAiConnection(env, cookbook, "catalog");
             return json(await fetchOpenAiModelCatalog(key));
           }
           case "/api/search":
@@ -378,6 +445,14 @@ export default {
         if (url.pathname === "/api/settings") {
           return json(await cookbook.saveCodeSettings(await body(request)));
         }
+        if (url.pathname === "/api/settings/openai") {
+          return await saveOpenAi(request, env, cookbook);
+        }
+        if (url.pathname === "/api/settings/openai/remove-key") {
+          await cookbook.reserveOpenAiRequest("settings");
+          await cookbook.removeOpenAiKey();
+          return json(await openAiStatus(env, cookbook));
+        }
         if (url.pathname === "/api/assistant") {
           return await askAssistant(request, env, cookbook);
         }
@@ -394,13 +469,27 @@ export default {
       }
       return json({ error: "Route not found." }, 404);
     } catch (error) {
+      if (
+        openAiPaths.has(url.pathname) &&
+        !(
+          error instanceof RequestError ||
+          error instanceof JsonBodyError ||
+          error instanceof OpenAiError ||
+          error instanceof SettingsCryptoError
+        )
+      ) {
+        console.error("OpenAI operation failed.");
+        return json({ error: "The OpenAI operation failed. Please retry." }, 500);
+      }
       return json(
         { error: message(error), code: error instanceof RequestError ? error.code : undefined },
-        error instanceof RequestError ||
-          error instanceof JsonBodyError ||
-          error instanceof OpenAiError
-          ? error.status
-          : 500,
+        error instanceof SettingsCryptoError
+          ? 503
+          : error instanceof RequestError ||
+              error instanceof JsonBodyError ||
+              error instanceof OpenAiError
+            ? error.status
+            : 500,
       );
     }
   },

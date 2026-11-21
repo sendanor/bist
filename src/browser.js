@@ -1413,9 +1413,118 @@ async function recipePage(section, slug, revision) {
   };
 }
 
-/** Build the maintainer form for editing the recipe quality policy. */
+/**
+ * Build the OpenAI settings form with a write-only credential field.
+ * @param settings Current model, credential presence and encryption readiness.
+ */
+function openAiSettingsForm(settings) {
+  const model = field(
+    "model",
+    t("openai-model"),
+    { maxlength: 100, required: "" },
+    settings.model ?? "",
+  );
+  const key = field("apiKey", t("openai-key"), {
+    type: "password",
+    autocomplete: "new-password",
+    maxlength: 512,
+    spellcheck: "false",
+  });
+  key.querySelector("input").disabled = !settings.encryptionAvailable;
+  const keyStatus = el("p", { className: "muted" });
+  const result = el("p", { role: "status" });
+  const save = el("button", { type: "submit", className: "primary" }, t("openai-save"));
+  const remove = btn(t("openai-remove"), () => {
+    confirmation.hidden = false;
+    confirmRemove.focus();
+  });
+  const cancel = btn(t("cancel"), () => {
+    confirmation.hidden = true;
+    remove.focus();
+  });
+  const confirmRemove = btn(t("openai-confirm-remove"), async () => {
+    confirmRemove.disabled = true;
+    cancel.disabled = true;
+    save.disabled = true;
+    try {
+      update(await api("settings/openai/remove-key", {}));
+      result.textContent = t("openai-removed");
+      confirmation.hidden = true;
+      save.focus();
+    } catch (error) {
+      result.textContent = error.message;
+    } finally {
+      confirmRemove.disabled = false;
+      cancel.disabled = false;
+      save.disabled = false;
+    }
+  });
+  const confirmation = el(
+    "div",
+    { hidden: "" },
+    el("p", {}, t("openai-remove-help")),
+    el("div", { className: "actions" }, confirmRemove, cancel),
+  );
+  /**
+   * Update the visible status without populating the credential field.
+   * @param state Metadata returned by the settings endpoint.
+   */
+  function update(state) {
+    keyStatus.textContent = state.hasCredential
+      ? t("openai-key-configured")
+      : t("openai-key-missing");
+    remove.hidden = !state.hasCredential;
+  }
+  update(settings);
+  return el(
+    "form",
+    {
+      className: "panel form",
+      /**
+       * Save the model and optionally replace the credential.
+       * @param event Browser submission event for the OpenAI settings section.
+       */
+      onsubmit: async (event) => {
+        event.preventDefault();
+        const input = event.currentTarget.elements;
+        const replacement = input.apiKey.value.trim();
+        input.apiKey.value = "";
+        save.disabled = true;
+        remove.disabled = true;
+        confirmation.hidden = true;
+        result.textContent = "";
+        try {
+          update(
+            await api("settings/openai", {
+              model: input.model.value,
+              ...(replacement ? { apiKey: replacement } : {}),
+            }),
+          );
+          result.textContent = t("openai-saved");
+        } catch (error) {
+          result.textContent = error.message;
+        } finally {
+          save.disabled = false;
+          remove.disabled = false;
+        }
+      },
+    },
+    el("h2", {}, t("openai-settings")),
+    model,
+    key,
+    keyStatus,
+    !settings.encryptionAvailable &&
+      el("p", { className: "muted" }, t("openai-encryption-missing")),
+    el("div", { className: "actions" }, save, remove),
+    confirmation,
+    result,
+  );
+}
+
+/** Build the maintainer's OpenAI and recipe quality settings. */
 async function settingsPage() {
   const { policy, prettierOptions, eslintRules, qualityOptions } = await api("settings");
+  const openAiSettings = await api("settings/openai");
   const form = el("form", { className: "form code-settings" });
   const controls = {};
   const formatOptions = prettierOptions.map((option) => {
@@ -1565,7 +1674,13 @@ async function settingsPage() {
       save.disabled = false;
     }
   });
-  return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
+  return [
+    title(t("settings")),
+    openAiSettingsForm(openAiSettings),
+    el("h2", {}, t("code-policy")),
+    el("p", { className: "muted" }, t("set-the-rules-for-new-recipe-revisions-submitted")),
+    form,
+  ];
 }
 
 /** Build the maintainer's published-recipe assistant and its model access check. */
@@ -1573,7 +1688,15 @@ async function assistantPage() {
   const { configured, model } = await api("assistant");
   const heading = title(t("assistant"), t("assistant-description"));
   if (!configured) {
-    return [heading, el("p", { className: "panel" }, t("assistant-unconfigured"))];
+    return [
+      heading,
+      el(
+        "div",
+        { className: "panel" },
+        el("p", {}, t("assistant-unconfigured")),
+        buttonLink(t("settings"), "/settings"),
+      ),
+    ];
   }
   const modelStatus = el("p", { role: "status", className: "muted" });
   const check = btn(t("assistant-check-model"), async () => {

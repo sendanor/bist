@@ -94,12 +94,18 @@ settings and credentials outside the public repository.
 ### OpenAI assistant
 
 The optional **Assistant** page lets maintainers ask questions about published recipes.
-In ChatGPT Sites, add `OPENAI_API_KEY` as a secret environment variable on the Site.
-Set `OPENAI_MODEL` in the Worker runtime to a model your project can use with the
-Responses API and function calling. Keep the API key out of Git and the browser.
-The **Check model access** button checks
-whether the configured model appears in the key's model catalog. Ask a question to
-verify inference and tool support. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+Set a randomly generated 32-byte key, encoded as 64 hexadecimal characters, as the
+`SETTINGS_ENCRYPTION_KEY` deployment secret. Keep a secure copy separate from D1 backups.
+In **Settings → OpenAI**, enter the OpenAI API key and a model that supports the Responses
+API and function calling, then save. Bist stores the API key encrypted in D1 and shows only
+whether a key is configured. Maintainers can update the model or replace or remove the API key
+without redeploying. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+
+Use **Assistant → Check model access** to check whether the model appears in the key's
+catalog, then ask a question to verify inference and tool support. If upgrading from an
+environment-configured release, enter the model and credential in Bist Settings and remove
+the old `OPENAI_API_KEY` and `OPENAI_MODEL` deployment values. If the deployment encryption
+key changes or is lost, enter the OpenAI credential again to encrypt it under the replacement.
 
 The assistant sends each question and any published recipe excerpts it uses to OpenAI.
 Bist does not save the conversation. The assistant can search published recipes and read

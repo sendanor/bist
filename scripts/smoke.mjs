@@ -133,6 +133,10 @@ try {
   await db.batch(
     listingMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
   );
+  const secretsMigration = await readFile("drizzle/0009_openai_settings.sql", "utf8");
+  await db.batch(
+    secretsMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
+  );
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -159,6 +163,32 @@ try {
     (await dispatch("/api/assistant", "maintainer", { question: "Find a recipe." })).status,
     503,
   );
+  assert.equal((await dispatch("/api/settings/openai", "author")).status, 403);
+  assert.equal(
+    (
+      await dispatch("/api/settings/openai", "author", {
+        model: "fixture-model",
+        apiKey: "test-provider-credential",
+        maintainer: true,
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await dispatch("/api/settings/openai", "maintainer", {
+        model: "fixture-model",
+        apiKey: "test-provider-credential",
+      })
+    ).status,
+    503,
+  );
+  assert.deepEqual(await (await dispatch("/api/settings/openai", "maintainer")).json(), {
+    model: null,
+    hasCredential: false,
+    encryptionAvailable: false,
+    configured: false,
+  });
   const payload = {
     slug: "batch-items",
     title: "Batch items into chunks",
@@ -1096,10 +1126,12 @@ describe("hasFields", () => {
     .run();
   await runtime.dispose();
   const model = "fixture-model";
-  const key = "test-provider-credential";
+  let key = "test-provider-credential";
+  const deploymentKey = "12".repeat(32);
+  const rotatedDeploymentKey = "34".repeat(32);
   let inferenceCalls = 0;
-  runtime = worker({
-    bindings: { OPENAI_API_KEY: key, OPENAI_MODEL: model },
+  const provider = {
+    bindings: { SETTINGS_ENCRYPTION_KEY: deploymentKey },
     /**
      * Emulate the provider and validate the request transcript without network access.
      * @param request The local Worker outgoing request.
@@ -1163,7 +1195,41 @@ describe("hasFields", () => {
       }
       return Response.json({ status: "completed", output: [output] });
     },
+  };
+  runtime = worker(provider);
+  const refused = await runtime.dispatchFetch("https://cookbook.local/api/settings/openai", {
+    method: "POST",
+    headers: {
+      origin: "https://outside.example",
+      "oai-authenticated-user-id": "maintainer",
+      "oai-authenticated-user-email": "maintainer@example.test",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ model, apiKey: key }),
   });
+  assert.equal(refused.status, 403);
+  const savedOpenAi = await dispatch("/api/settings/openai", "maintainer", { model, apiKey: key });
+  assert.equal(savedOpenAi.status, 200);
+  assert.deepEqual(await savedOpenAi.json(), {
+    model,
+    hasCredential: true,
+    encryptionAvailable: true,
+    configured: true,
+  });
+  const secretsDb = await runtime.getD1Database("DB");
+  const row = await secretsDb
+    .prepare("SELECT credential FROM openai_settings WHERE id = 1")
+    .first();
+  assert.match(row.credential, /^v1\.[a-f0-9]{24}\.[a-f0-9]+$/u);
+  assert.ok(!JSON.stringify(row).includes(key));
+  const metadataOnly = await dispatch("/api/settings/openai", "maintainer", { model });
+  assert.equal(metadataOnly.status, 200);
+  assert.deepEqual(
+    await secretsDb.prepare("SELECT credential FROM openai_settings WHERE id = 1").first(),
+    row,
+  );
+  await runtime.dispose();
+  runtime = worker(provider);
   assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
     configured: true,
     model,
@@ -1185,6 +1251,43 @@ describe("hasFields", () => {
   const limited = await dispatch("/api/assistant", "maintainer", { question: "Try again." });
   assert.equal(limited.status, 429);
   assert.doesNotMatch(await limited.text(), /Private provider failure/);
+  const activeSecretsDb = await runtime.getD1Database("DB");
+  await activeSecretsDb
+    .prepare("UPDATE openai_settings SET credential = ? WHERE id = 1")
+    .bind(row.credential.slice(0, -2) + (row.credential.endsWith("ff") ? "00" : "ff"))
+    .run();
+  assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
+  assert.equal(inferenceCalls, 5);
+  await activeSecretsDb
+    .prepare("UPDATE openai_settings SET credential = ? WHERE id = 1")
+    .bind(row.credential)
+    .run();
+  await runtime.dispose();
+  runtime = worker({
+    ...provider,
+    bindings: {
+      SETTINGS_ENCRYPTION_KEY: rotatedDeploymentKey,
+      MAINTAINER_EMAILS: "different@example.test",
+    },
+  });
+  assert.equal((await dispatch("/api/settings/openai/remove-key", "maintainer", {})).status, 403);
+  await runtime.dispose();
+  runtime = worker({ ...provider, bindings: { SETTINGS_ENCRYPTION_KEY: rotatedDeploymentKey } });
+  assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
+  key = "replacement-provider-credential";
+  assert.equal(
+    (await dispatch("/api/settings/openai", "maintainer", { model, apiKey: key })).status,
+    200,
+  );
+  assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 200);
+  const removedKey = await dispatch("/api/settings/openai/remove-key", "maintainer", {});
+  assert.deepEqual(await removedKey.json(), {
+    model,
+    hasCredential: false,
+    encryptionAvailable: true,
+    configured: false,
+  });
+  assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
   console.log(
     JSON.stringify({
       passed:

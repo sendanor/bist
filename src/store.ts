@@ -377,6 +377,76 @@ export class Cookbook {
     }
   }
 
+  /** Report saved model metadata and whether an encrypted credential exists. */
+  async openAiSettings() {
+    this.maintainer();
+    const row = await this.sql(
+      "SELECT model, credential IS NOT NULL AS hasCredential FROM openai_settings WHERE id = 1",
+    ).first<{ model: string; hasCredential: number }>();
+    return { model: row?.model ?? null, hasCredential: Boolean(row?.hasCredential) };
+  }
+
+  /** Load encrypted connection settings for the authorized backend integration. */
+  async readOpenAiConnection() {
+    this.maintainer();
+    return this.sql("SELECT model, credential FROM openai_settings WHERE id = 1").first<{
+      model: string;
+      credential: string | null;
+    }>();
+  }
+
+  /**
+   * Save the model and optional replacement ciphertext in a permission-checked write.
+   * @param model Model ID approved by the current maintainer.
+   * @param credential Replacement encrypted envelope, or null to preserve the existing value.
+   */
+  async saveOpenAiSettings(model: string, credential: string | null) {
+    this.maintainer();
+    await this.sql(
+      `INSERT INTO openai_settings (id, model, credential) SELECT 1, ?, ? WHERE ? = 1
+       ON CONFLICT(id) DO UPDATE SET model = excluded.model,
+         credential = COALESCE(excluded.credential, openai_settings.credential)`,
+      model,
+      credential,
+      this.user.maintainer ? 1 : 0,
+    ).run();
+  }
+
+  /** Remove the OpenAI credential while leaving the configured model in place. */
+  async removeOpenAiKey() {
+    this.maintainer();
+    await this.sql(
+      "UPDATE openai_settings SET credential = NULL WHERE id = 1 AND ? = 1",
+      this.user.maintainer ? 1 : 0,
+    ).run();
+  }
+
+  /**
+   * Reserve one operation in the authenticated maintainer's one-minute rate window.
+   * @param action OpenAI operation whose independent quota is being reserved.
+   * @throws {RequestError} When the caller is unauthorized or exceeds the quota.
+   */
+  async reserveOpenAiRequest(action: "settings" | "catalog" | "ask") {
+    this.maintainer();
+    const result = await this.sql(
+      `INSERT INTO openai_rate_limits (actor, action, window, hits)
+       SELECT ?, ?, unixepoch(), 1 WHERE ? = 1
+       ON CONFLICT(actor, action) DO UPDATE SET
+         hits = CASE WHEN openai_rate_limits.window <= excluded.window - 60
+                     THEN 1 ELSE openai_rate_limits.hits + 1 END,
+         window = CASE WHEN openai_rate_limits.window <= excluded.window - 60
+                       THEN excluded.window ELSE openai_rate_limits.window END
+       WHERE openai_rate_limits.window <= excluded.window - 60 OR openai_rate_limits.hits < ?`,
+      this.user.id,
+      action,
+      this.user.maintainer ? 1 : 0,
+      action === "ask" ? 8 : 12,
+    ).run();
+    if (!result.meta.changes) {
+      throw new RequestError("Too many OpenAI requests. Try again shortly.", 429);
+    }
+  }
+
   /**
    * Read the stored recipe policy and apply settings defaults.
    * @throws {Error} When stored settings do not form an object.
