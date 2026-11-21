@@ -1774,6 +1774,7 @@ function openAiSettingsForm(settings) {
     maxlength: 512,
     spellcheck: "false",
     required: "",
+    "aria-describedby": "openai-key-permissions",
   });
   key.querySelector("input").disabled = !settings.encryptionAvailable;
   const keyStatus = el("p", { className: "muted" });
@@ -1855,6 +1856,17 @@ function openAiSettingsForm(settings) {
       },
     },
     el("h2", {}, t("openai-api-key")),
+    el(
+      "p",
+      { id: "openai-key-permissions", className: "muted" },
+      t("openai-key-permissions"),
+      " ",
+      el(
+        "a",
+        { href: "https://developers.openai.com/api/docs/guides/rbac" },
+        t("openai-permissions-docs"),
+      ),
+    ),
     key,
     keyStatus,
     !settings.encryptionAvailable &&
