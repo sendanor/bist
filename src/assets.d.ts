@@ -17,3 +17,8 @@ declare module "cookbook:typescript-libraries" {
   const libraries: Readonly<Record<string, string | undefined>>;
   export default libraries;
 }
+
+declare module "*.md" {
+  const text: string;
+  export default text;
+}

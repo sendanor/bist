@@ -139,7 +139,7 @@ async function checkImport(file, path, at, typeOnly) {
     }
     return;
   }
-  const asset = /\.(?:html|css|json)$/u.test(path) ? resolve(dirname(file), path) : undefined;
+  const asset = /\.(?:html|css|json|md)$/u.test(path) ? resolve(dirname(file), path) : undefined;
   const absolute = target
     ? resolve(target)
     : asset && (await fileExists(asset))

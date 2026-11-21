@@ -65,7 +65,7 @@ await build({
     "source-map-support",
     "node:*",
   ],
-  loader: { ".html": "text", ".css": "text" },
+  loader: { ".html": "text", ".css": "text", ".md": "text" },
   plugins: [
     {
       name: "cookbook-bundles",
