@@ -85,5 +85,4 @@ separate channel for security reports.
 
 ## License
 
-[LICENSE](LICENSE) contains the MIT License. The license metadata in
-[package.json](package.json) and [package-lock.json](package-lock.json) currently says ISC.
+Code Cookbook is licensed under the [MIT License](LICENSE).
