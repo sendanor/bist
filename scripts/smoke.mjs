@@ -141,6 +141,7 @@ try {
   await db.prepare(await readFile("drizzle/0011_mcp_settings.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0012_assistant_docs_mcp.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0013_context7.sql", "utf8")).run();
+  await db.prepare(await readFile("drizzle/0014_assistant_skills.sql", "utf8")).run();
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -155,6 +156,30 @@ try {
   const mcpPath = "/api/settings/mcp";
   const docsMcpPath = mcpPath + "/openai-docs";
   const context7Path = mcpPath + "/context7";
+  const skillsPath = mcpPath + "/skills";
+  const builtInSkills = ["caveman", "suomenkieli"];
+  assert.deepEqual(await (await dispatch(skillsPath, "maintainer")).json(), {
+    enabled: builtInSkills,
+    skills: builtInSkills,
+  });
+  assert.equal((await dispatch(skillsPath, "author")).status, 403);
+  assert.equal((await dispatch(skillsPath, "author", { enabled: [] })).status, 403);
+  assert.equal(
+    (await dispatch(skillsPath, "maintainer", { enabled: ["caveman", "caveman"] })).status,
+    400,
+  );
+  assert.equal((await dispatch(skillsPath, "maintainer", { enabled: ["unknown"] })).status, 400);
+  assert.equal((await dispatch(skillsPath, "maintainer", { enabled: [] })).status, 200);
+  assert.deepEqual(await (await dispatch(skillsPath, "maintainer")).json(), {
+    enabled: [],
+    skills: builtInSkills,
+  });
+  assert.equal(
+    (await dispatch("/api/assistant", "maintainer", { question: "Briefly.", skill: "caveman" }))
+      .status,
+    403,
+  );
+  assert.equal((await dispatch(skillsPath, "maintainer", { enabled: builtInSkills })).status, 200);
   const finnishSkill = await dispatch("/api/skill?name=suomenkieli", "author");
   assert.equal(finnishSkill.headers.get("content-disposition"), 'attachment; filename="SKILL.md"');
   assert.match(await finnishSkill.text(), /^---\nname: suomenkieli/u);
@@ -229,6 +254,7 @@ try {
     configured: false,
     docsSearch: false,
     context7Search: false,
+    skills: builtInSkills,
     model: null,
   });
   assert.equal(
@@ -1533,6 +1559,7 @@ describe("hasFields", () => {
     model,
     docsSearch: false,
     context7Search: false,
+    skills: builtInSkills,
   });
   assert.deepEqual(await (await dispatch("/api/assistant/models", "maintainer")).json(), {
     status: "ready",

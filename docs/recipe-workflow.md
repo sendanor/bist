@@ -70,6 +70,11 @@ to use the OpenAI Docs connection, if enabled. [Context7 MCP tools](https://cont
 
 ## Use agent skills
 
+In **Settings → MCP → Assistant response skills**, maintainers choose which built-in
+skills the Assistant offers on this instance. Both are available by default and the
+Assistant applies a skill only when selected for a question. An empty saved selection
+hides the selector.
+
 Choose **Caveman** or **Suomen kieli** in the Assistant's **Response skill** field
 to apply the writing guidance to that answer. The library also offers both skills
 as downloads. On a published recipe, **Download SKILL.md** exports its agent instructions

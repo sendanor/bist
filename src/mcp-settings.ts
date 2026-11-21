@@ -96,3 +96,47 @@ export async function saveDocsMcp(db: Database, input: Input, context7 = false) 
     .run();
   return { enabled: input.enabled };
 }
+
+/**
+ * Read the instance's available response skills, retaining an explicitly empty selection.
+ * @param db The instance database binding.
+ * @param builtIn Names of skills included in this version.
+ */
+export async function enabledSkills(db: Database, builtIn: readonly string[]) {
+  const row = await db
+    .prepare("SELECT enabled FROM assistant_skill_settings WHERE id = 1")
+    .first<{ enabled: string }>();
+  if (!row) {
+    return builtIn;
+  }
+  const selection = JSON.parse(row.enabled);
+  return isArray(selection) ? builtIn.filter((id) => selection.includes(id)) : [];
+}
+
+/**
+ * Persist which built-in skills maintainers can select for a response.
+ * @param db The instance database binding.
+ * @param input Untrusted form data containing the complete new selection.
+ * @param builtIn Names of skills included in this version.
+ * @throws {RequestError} When the selection includes missing, duplicated or unknown values.
+ */
+export async function saveEnabledSkills(db: Database, input: Input, builtIn: readonly string[]) {
+  const selection = input.enabled;
+  if (
+    !isArray(selection) ||
+    selection.length > builtIn.length ||
+    new Set(selection).size !== selection.length ||
+    !selection.every((id) => builtIn.some((name) => name === id))
+  ) {
+    throw new RequestError("Choose supported response skills once each.");
+  }
+  const enabled = builtIn.filter((id) => selection.includes(id));
+  await db
+    .prepare(
+      `INSERT INTO assistant_skill_settings (id, enabled) VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled`,
+    )
+    .bind(JSON.stringify(enabled))
+    .run();
+  return { enabled };
+}

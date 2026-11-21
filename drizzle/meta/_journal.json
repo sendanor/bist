@@ -99,6 +99,13 @@
       "when": 1795219200013,
       "tag": "0013_context7",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1795219200014,
+      "tag": "0014_assistant_skills",
+      "breakpoints": true
     }
   ]
 }

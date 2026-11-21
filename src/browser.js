@@ -33,6 +33,10 @@ const parts = {
   styles: t("stylesheet"),
   instructions: t("agent-instructions"),
 };
+const responseSkillLabels = {
+  caveman: t("assistant-skill-caveman"),
+  suomenkieli: t("assistant-skill-finnish"),
+};
 const stateLabels = {
   pending: t("pending-review"),
   changes: t("changes-requested"),
@@ -2048,7 +2052,7 @@ async function codePolicyPage() {
 
 /** Build the maintainer's published-recipe assistant and its model access check. */
 async function assistantPage() {
-  const { configured, model, docsSearch, context7Search } = await api("assistant");
+  const { configured, model, docsSearch, context7Search, skills } = await api("assistant");
   const heading = title(t("assistant"), t("assistant-description"));
   if (!configured) {
     return [
@@ -2111,7 +2115,7 @@ async function assistantPage() {
               question,
               docsQuery: data.get("docsQuery")?.trim(),
               libraryId: data.get("libraryId")?.trim(),
-              skill: data.get("skill"),
+              skill: data.get("skill") ?? undefined,
             });
             const links = [
               ...sources.map(({ slug, id, title }) => ({
@@ -2144,18 +2148,18 @@ async function assistantPage() {
         "",
         true,
       ),
-      el(
-        "label",
-        {},
-        t("assistant-skill"),
+      skills.length > 0 &&
         el(
-          "select",
-          { name: "skill" },
-          el("option", { value: "" }, t("assistant-skill-default")),
-          el("option", { value: "caveman" }, t("assistant-skill-caveman")),
-          el("option", { value: "suomenkieli" }, t("assistant-skill-finnish")),
+          "label",
+          {},
+          t("assistant-skill"),
+          el(
+            "select",
+            { name: "skill" },
+            el("option", { value: "" }, t("assistant-skill-default")),
+            ...skills.map((id) => el("option", { value: id }, responseSkillLabels[id])),
+          ),
         ),
-      ),
       (docsSearch || context7Search) &&
         field("docsQuery", t("assistant-docs-query"), {
           maxlength: 160,
@@ -2304,6 +2308,44 @@ async function assistantMcpForm(context7 = false) {
   );
 }
 
+/** Build the maintainer form for response skill availability across the instance. */
+async function responseSkillsForm() {
+  const { enabled, skills } = await api("settings/mcp/skills");
+  const status = el("p", { role: "status", className: "muted" });
+  const save = el("button", { className: "primary", type: "submit" }, t("mcp-save-skills"));
+  return el(
+    "form",
+    {
+      className: "panel form",
+      /**
+       * Persist the selected skill identifiers, including an empty selection.
+       * @param event Submission from the response skills settings form.
+       */
+      onsubmit: async (event) => {
+        event.preventDefault();
+        const selection = new FormData(event.currentTarget).getAll("skill");
+        save.disabled = true;
+        status.textContent = "";
+        try {
+          await api("settings/mcp/skills", { enabled: selection });
+          status.textContent = t("mcp-skills-saved");
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          save.disabled = false;
+        }
+      },
+    },
+    el("h2", {}, t("mcp-response-skills")),
+    ...skills.map((id) => {
+      const checkbox = el("input", { type: "checkbox", name: "skill", value: id });
+      checkbox.checked = enabled.includes(id);
+      return el("label", { className: "setting-toggle" }, responseSkillLabels[id], checkbox);
+    }),
+    el("div", { className: "actions" }, save, status),
+  );
+}
+
 /**
  * Navigate among settings sections while retaining the active section.
  * @param page The current settings route.
@@ -2342,6 +2384,7 @@ async function settingsPage(page) {
       await mcpSettingsForm(),
       await assistantMcpForm(),
       await assistantMcpForm(true),
+      await responseSkillsForm(),
     ];
   }
   return [title(t("settings")), nav];

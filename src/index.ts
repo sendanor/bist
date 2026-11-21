@@ -1,7 +1,14 @@
 import { isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
-import { docsMcpEnabled, readMcpSettings, saveDocsMcp, saveMcpSettings } from "./mcp-settings.ts";
+import {
+  docsMcpEnabled,
+  enabledSkills,
+  readMcpSettings,
+  saveDocsMcp,
+  saveEnabledSkills,
+  saveMcpSettings,
+} from "./mcp-settings.ts";
 import { searchContext7, searchOpenAiDocs } from "./openai-docs-mcp.ts";
 import { Cookbook, RequestError, str, type Database, type Input } from "./store";
 import {
@@ -37,10 +44,12 @@ const mcpSettingsPath = "/api/settings/mcp";
 const mcpCheckPath = mcpSettingsPath + "/check";
 const docsMcpPath = mcpSettingsPath + "/openai-docs";
 const context7Path = mcpSettingsPath + "/context7";
+const skillsSettingsPath = mcpSettingsPath + "/skills";
 const skills = new Map([
   ["caveman", caveman],
   ["suomenkieli", suomenkieli],
 ]);
+const skillNames = [...skills.keys()];
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -428,6 +437,9 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   if (skillName && !skill) {
     throw new RequestError("Choose a supported skill.");
   }
+  if (skillName && !(await enabledSkills(env.DB, skillNames)).includes(skillName)) {
+    throw new RequestError("This response skill is disabled.", 403);
+  }
   const context7 = Boolean(libraryId);
   if (context7 && (!docsQuery || !/^\/[\w.-]+\/[\w.-]+(?:\/[\w.+-]+)?$/u.test(libraryId))) {
     throw new RequestError(
@@ -537,7 +549,9 @@ export default {
       if (
         !maintainer &&
         (openAiPaths.has(url.pathname) ||
-          [mcpSettingsPath, mcpCheckPath, docsMcpPath, context7Path].includes(url.pathname))
+          [mcpSettingsPath, mcpCheckPath, docsMcpPath, context7Path, skillsSettingsPath].includes(
+            url.pathname,
+          ))
       ) {
         throw new RequestError("Maintainer access required.", 403);
       }
@@ -556,6 +570,7 @@ export default {
               configured,
               docsSearch: await docsMcpEnabled(env.DB),
               context7Search: await docsMcpEnabled(env.DB, true),
+              skills: await enabledSkills(env.DB, skillNames),
             });
           }
           case "/api/settings/openai":
@@ -568,6 +583,8 @@ export default {
             return json({ enabled: await docsMcpEnabled(env.DB) });
           case context7Path:
             return json({ enabled: await docsMcpEnabled(env.DB, true) });
+          case skillsSettingsPath:
+            return json({ enabled: await enabledSkills(env.DB, skillNames), skills: skillNames });
           case "/api/skill":
             return await downloadSkill(input, cookbook);
           case "/api/assistant/models": {
@@ -604,6 +621,9 @@ export default {
         }
         if (url.pathname === context7Path) {
           return json(await saveDocsMcp(env.DB, await body(request), true));
+        }
+        if (url.pathname === skillsSettingsPath) {
+          return json(await saveEnabledSkills(env.DB, await body(request), skillNames));
         }
         if (url.pathname === "/api/settings/openai/remove-key") {
           await cookbook.reserveOpenAiRequest("settings");
