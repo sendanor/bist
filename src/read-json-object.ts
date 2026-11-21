@@ -35,14 +35,36 @@ export async function readJsonObject(
   if (contentType !== "application/json") {
     throw new JsonBodyError("JSON content type required.", 415);
   }
-  if (!request.body) {
-    throw new JsonBodyError("JSON body required.", 400);
+  const text = await readUtf8(request.body, maxBytes);
+  try {
+    const result: unknown = JSON.parse(text);
+    if (!isRecord(result)) {
+      throw new JsonBodyError("Expected a JSON object.", 400);
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof JsonBodyError) {
+      throw error;
+    }
+    throw new JsonBodyError("Invalid JSON body.", 400);
   }
-  if (request.body.locked) {
+}
+
+/**
+ * Read a UTF-8 stream without accepting bytes beyond the configured limit.
+ * @param body Fetch body stream, which may be absent.
+ * @param maxBytes A positive byte limit chosen by the caller.
+ * @throws {JsonBodyError} If the body is absent, locked, oversized, or invalid UTF-8.
+ */
+export async function readUtf8(body: JsonBody["body"], maxBytes: number) {
+  if (!body) {
+    throw new JsonBodyError("Request body required.", 400);
+  }
+  if (body.locked) {
     throw new JsonBodyError("Request body is unavailable.", 400);
   }
 
-  const reader = request.body.getReader();
+  const reader = body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
   let text = "";
@@ -58,11 +80,7 @@ export async function readJsonObject(
       }
       text += decoder.decode(value, { stream: true });
     }
-    const result: unknown = JSON.parse(text + decoder.decode());
-    if (!isRecord(result)) {
-      throw new JsonBodyError("Expected a JSON object.", 400);
-    }
-    return result;
+    return text + decoder.decode();
   } catch (error) {
     // Return the response even if the underlying stream takes time to cancel.
     void cancelReader(reader);

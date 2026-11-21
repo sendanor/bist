@@ -46,7 +46,7 @@ function layer(file) {
   if (["store.ts", "mcp-settings.ts"].includes(path)) {
     return "storage";
   }
-  if (["openai.ts", "settings-crypto.ts"].includes(path)) {
+  if (["openai.ts", "openai-docs-mcp.ts", "settings-crypto.ts"].includes(path)) {
     return "provider";
   }
   if (path === "index.ts") {

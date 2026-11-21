@@ -1,8 +1,42 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fetchOpenAiModelCatalog, runOpenAiAssistant } from "../src/openai.ts";
+import { searchOpenAiDocs } from "../src/openai-docs-mcp.ts";
 
 const config = { key: "test-provider-credential", model: "fixture-model" };
+
+test("Docs MCP rechecks availability and discards oversized results", async () => {
+  for (const enabledAfterInitialize of [false, true]) {
+    let checks = 0;
+    let searchCalls = 0;
+    const hits = await searchOpenAiDocs(
+      "Responses API",
+      async () => ++checks === 1 || enabledAfterInitialize,
+      async (url, init) => {
+        assert.equal(url, "https://developers.openai.com/mcp");
+        assert.equal(init?.redirect, "manual");
+        const { method, id } = JSON.parse(String(init?.body));
+        if (method === "initialize") {
+          return new Response(
+            "data: " +
+              JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: "2025-11-25" } }) +
+              "\r\n\r\n",
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        if (method === "notifications/initialized") {
+          return new Response(null, { status: 202 });
+        }
+        searchCalls++;
+        return new Response("x".repeat(32_001), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    );
+    assert.equal(hits, null);
+    assert.equal(searchCalls, Number(enabledAfterInitialize));
+  }
+});
 
 test("model catalog rejects redirects and returns safe authorization failures", async () => {
   const catalog = await fetchOpenAiModelCatalog(config.key, async (url, options) => {
