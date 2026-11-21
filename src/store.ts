@@ -6,7 +6,7 @@ import {
   qualityOptions,
   validateCodePolicy,
 } from "./code-policy";
-import { normalizeFiles, parts, recipeFileNames, type RecipeFileNames } from "./format";
+import { normalizeFiles, parts, recipeFileNames, type Part, type RecipeFileNames } from "./format";
 import { sourceLines } from "./line-diff";
 import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
 export interface Statement {
@@ -40,9 +40,28 @@ export interface Database {
   batch(statements: Statement[]): Promise<{ meta: { changes: number } }[]>;
 }
 
-export type User = { id: string; maintainer: boolean };
+export type User = { id: string; maintainer: boolean; displayName?: string };
 
 export type Input = Record<string, unknown>;
+
+/** A bounded issue associated with one normalized recipe part. */
+export interface LlmFinding {
+  readonly part: Part;
+  readonly reason: string;
+}
+
+/** Candidate content and the reference snapshot used to decide which files changed. */
+export interface SubmissionSnapshot {
+  readonly actor: string;
+  readonly intent: readonly (string | number | null)[];
+  readonly files: Readonly<Partial<Record<Part, string>>>;
+  readonly previous: Readonly<Partial<Record<Part, string>>>;
+  readonly previousWarnings: readonly LlmFinding[];
+  readonly receipt: string;
+}
+
+/** Check a normalized submission before its storage transaction. */
+export type SubmissionReview = (candidate: SubmissionSnapshot) => Promise<readonly LlmFinding[]>;
 
 type Revision = {
   id: string;
@@ -55,6 +74,7 @@ type Revision = {
   tags: string;
   files: string | null;
   file_names: string;
+  llm_warnings: string;
   state: string;
   created: string;
   live: string | null;
@@ -80,6 +100,7 @@ interface ReviewComment {
   readonly line: number | null;
   readonly excerpt: string | null;
   readonly body: string;
+  readonly authorName: string | null;
 }
 
 const visibleDuplicate = `
@@ -285,17 +306,34 @@ function decodeFiles(json: string | null, selected: readonly (typeof parts)[numb
   );
 }
 
+/**
+ * Decode adverse findings stored by the review pipeline.
+ * @param encoded Stored JSON warnings for the revision or a submission receipt.
+ */
+export function decodeLlmFindings(encoded: string | null): LlmFinding[] {
+  const data: unknown = JSON.parse(encoded ?? "[]");
+  if (!isArray(data)) {
+    return [];
+  }
+  return parts.flatMap((part) => {
+    const found = data.find((entry) => isRecord(entry) && entry.part === part);
+    return isRecord(found) && isString(found.reason) ? [{ part, reason: found.reason }] : [];
+  });
+}
+
 export class RequestError extends Error {
   /**
    * Construct a request failure with its caller-facing status and optional code.
    * @param message The message safe to include in the response.
    * @param status The HTTP status for this failure.
-   * @param code The optional machine-readable code for duplicate warnings.
+   * @param code The machine-readable code for an acknowledgeable warning.
+   * @param receipt Proof that the review findings match this submission.
    */
   constructor(
     message: string,
     public status = 400,
-    public code?: "duplicate_warning",
+    public code?: "duplicate_warning" | "llm_warning",
+    public receipt?: string,
   ) {
     super(message);
   }
@@ -382,17 +420,24 @@ export class Cookbook {
   async openAiSettings() {
     this.maintainer();
     const row = await this.sql(
-      "SELECT model, credential IS NOT NULL AS hasCredential FROM openai_settings WHERE id = 1",
-    ).first<{ model: string; hasCredential: number }>();
-    return { model: row?.model || null, hasCredential: Boolean(row?.hasCredential) };
+      "SELECT model, reasoning_effort, credential IS NOT NULL AS hasCredential FROM openai_settings WHERE id = 1",
+    ).first<{ model: string; reasoning_effort: string; hasCredential: number }>();
+    return {
+      model: row?.model || null,
+      reasoningEffort: row?.reasoning_effort ?? "",
+      hasCredential: Boolean(row?.hasCredential),
+    };
   }
 
   /** Load encrypted connection settings for the authorized backend integration. */
   async readOpenAiConnection() {
     this.maintainer();
-    return this.sql("SELECT model, credential FROM openai_settings WHERE id = 1").first<{
+    return this.sql(
+      "SELECT model, credential, reasoning_effort FROM openai_settings WHERE id = 1",
+    ).first<{
       model: string;
       credential: string | null;
+      reasoning_effort: string;
     }>();
   }
 
@@ -400,16 +445,23 @@ export class Cookbook {
    * Save the model and optional replacement ciphertext in a permission-checked write.
    * @param model Model ID approved by the current maintainer, or null to preserve the saved model.
    * @param credential Replacement encrypted envelope, or null to preserve the existing value.
+   * @param effort Explicit reasoning effort, or null to retain it unless the model changes.
    */
-  async saveOpenAiSettings(model: string | null, credential: string | null) {
+  async saveOpenAiSettings(model: string | null, credential: string | null, effort: string | null) {
     this.maintainer();
     await this.sql(
-      `INSERT INTO openai_settings (id, model, credential) SELECT 1, COALESCE(?, ''), ? WHERE ? = 1
+      `INSERT INTO openai_settings (id, model, credential, reasoning_effort)
+       SELECT 1, COALESCE(?, ''), ?, COALESCE(?, '') WHERE ? = 1
        ON CONFLICT(id) DO UPDATE SET model = COALESCE(?, openai_settings.model),
-         credential = COALESCE(excluded.credential, openai_settings.credential)`,
+         credential = COALESCE(excluded.credential, openai_settings.credential),
+         reasoning_effort = COALESCE(?, CASE WHEN ? IS NOT NULL AND excluded.model != openai_settings.model
+                                   THEN '' ELSE openai_settings.reasoning_effort END)`,
       model,
       credential,
+      effort,
       this.user.maintainer ? 1 : 0,
+      model,
+      effort,
       model,
     ).run();
   }
@@ -687,9 +739,12 @@ export class Cookbook {
             canComment: this.user.maintainer,
             comments: (
               await this.sql(
-                `SELECT id, edit_version AS editVersion, part, line, excerpt, body
+                `SELECT id, edit_version AS editVersion, part, line, excerpt, body,
+                    COALESCE(reviewer_name, CASE WHEN reviewer = ? THEN ? END) AS authorName
              FROM revision_comments WHERE revision = ? AND edit_version <= ?
              ORDER BY edit_version DESC, part, line, id`,
+                this.user.id,
+                this.user.displayName ?? null,
                 row.id,
                 row.edit_version,
               ).all<ReviewComment>()
@@ -700,6 +755,9 @@ export class Cookbook {
     return {
       id: row.id,
       ...(review ? { review } : {}),
+      ...((this.user.maintainer || row.author === this.user.id) && row.llm_warnings !== "[]"
+        ? { llmWarnings: decodeLlmFindings(row.llm_warnings) }
+        : {}),
       editVersion: row.edit_version,
       slug: row.slug,
       title: row.title,
@@ -764,15 +822,16 @@ export class Cookbook {
       throw new RequestError("This line does not exist in the selected file part.");
     }
     const saved = await this.sql(
-      `INSERT INTO revision_comments (revision, edit_version, part, line, excerpt, body, reviewer)
-       SELECT id, edit_version, ?, ?, ?, ?, ? FROM revisions
+      `INSERT INTO revision_comments (revision, edit_version, part, line, excerpt, body, reviewer, reviewer_name)
+       SELECT id, edit_version, ?, ?, ?, ?, ?, ? FROM revisions
        WHERE id = ? AND slug = ? AND edit_version = ? AND state != 'removed'
-       RETURNING id, edit_version AS editVersion, part, line, excerpt, body`,
+       RETURNING id, edit_version AS editVersion, part, line, excerpt, body, reviewer_name AS authorName`,
       part,
       line,
       excerpt,
       body,
       this.user.id,
+      this.user.displayName ?? null,
       id,
       slug,
       version,
@@ -872,8 +931,9 @@ export class Cookbook {
   /**
    * Submit or replace an unapproved revision after validation and duplicate checks.
    * @param input The proposed recipe and revision operation received from the client.
+   * @param review Optional configured review pipeline for new file content.
    */
-  async submit(input: Input) {
+  async submit(input: Input, review?: SubmissionReview) {
     const slug = str(input.slug, "recipe slug", 64);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       throw new RequestError("Use a lowercase hyphenated slug.");
@@ -898,13 +958,13 @@ export class Cookbook {
     const parent = replace || base;
     const previous = parent
       ? await this.sql(
-          `SELECT file_names FROM revisions WHERE id = ? AND slug = ?
+          `SELECT file_names, files, llm_warnings FROM revisions WHERE id = ? AND slug = ?
        AND (state = 'published' OR (state IN ('pending','approved','changes') AND (author = ? OR ?)))`,
           parent,
           slug,
           this.user.id,
           this.user.maintainer,
-        ).first<{ file_names: string }>()
+        ).first<Pick<Revision, "file_names" | "files" | "llm_warnings">>()
       : null;
     const { files, fileNames, warnings } = await this.normalizeSubmission(
       input.files,
@@ -929,11 +989,22 @@ export class Cookbook {
       files: JSON.stringify(files),
       fileNames: JSON.stringify(fileNames),
     };
+    const reviewed = review
+      ? await review({
+          actor: this.user.id,
+          intent: [slug, base, replace, editVersion],
+          files,
+          previous: decodeFiles(previous?.files ?? null, parts),
+          previousWarnings: decodeLlmFindings(previous?.llm_warnings ?? null),
+          receipt: str(input.reviewReceipt, "LLM review receipt", 36, true),
+        })
+      : [];
+    const savedWarnings = JSON.stringify(reviewed);
     const notices = warnings.length ? { warnings } : {};
     if (replace) {
       const updated = await this.sql(
         `UPDATE revisions
-         SET title = ?, summary = ?, tags = ?, files = ?, file_names = ?, edit_version = edit_version + 1,
+         SET title = ?, summary = ?, tags = ?, files = ?, file_names = ?, llm_warnings = ?, edit_version = edit_version + 1,
              state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?,
              documentation_hash = ?, instructions_hash = ?, fingerprints_ready = 1
          WHERE id = ? AND slug = ? AND author = ? AND edit_version = ?
@@ -944,6 +1015,7 @@ export class Cookbook {
         payload.tags,
         payload.files,
         payload.fileNames,
+        savedWarnings,
         ...hashes,
         replace,
         slug,
@@ -970,9 +1042,9 @@ export class Cookbook {
         ...match,
       ),
       this.sql(
-        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,file_names,code_hash,unit_hashes,
+        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,file_names,llm_warnings,code_hash,unit_hashes,
           documentation_hash,instructions_hash,fingerprints_ready)
-        SELECT ?,r.slug,?,?,?,?,?,?,?,?,?,?,?,1 FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
+        SELECT ?,r.slug,?,?,?,?,?,?,?,?,?,?,?,?,1 FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
           (? IS NULL AND r.live IS NULL AND (r.owner = ? OR ?) AND NOT EXISTS
             (SELECT 1 FROM revisions WHERE slug = r.slug AND state != 'removed'))
           OR EXISTS (SELECT 1 FROM revisions p WHERE p.id = ? AND p.slug = r.slug AND
@@ -985,6 +1057,7 @@ export class Cookbook {
         payload.tags,
         payload.files,
         payload.fileNames,
+        savedWarnings,
         ...hashes,
         slug,
         ...match,

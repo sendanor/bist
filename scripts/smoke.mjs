@@ -37,6 +37,10 @@ function dispatch(path, user, data) {
   if (user) {
     headers["oai-authenticated-user-id"] = user;
     headers["oai-authenticated-user-email"] = user + "@example.test";
+    if (user === "maintainer") {
+      headers["oai-authenticated-user-full-name"] = encodeURIComponent("Maija Mäkinen");
+      headers["oai-authenticated-user-full-name-encoding"] = "percent-encoded-utf-8";
+    }
   }
   if (data) {
     headers["content-type"] = "application/json";
@@ -142,6 +146,33 @@ try {
   await db.prepare(await readFile("drizzle/0012_assistant_docs_mcp.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0013_context7.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0014_assistant_skills.sql", "utf8")).run();
+  const reviewMigration = await readFile("drizzle/0015_llm_review.sql", "utf8");
+  await db.batch(
+    reviewMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
+  );
+  await db.prepare(await readFile("drizzle/0016_review_comment_author.sql", "utf8")).run();
+  const llmReviewPath = "/api/settings/llm-review";
+  const llmRule = {
+    enabled: true,
+    model: "gpt-6.2-sol",
+    reasoningEffort: "low",
+    rules: { documentation: { mode: "warn", instruction: "Require an exact next step." } },
+  };
+  const checkedRecipe = {
+    slug: "llm-review-fixture",
+    title: "LLM review fixture",
+    summary: "A distinct documentation recipe for the review fixture.",
+    files: { documentation: "Review this new prose fixture for one exact next step." },
+  };
+  assert.equal((await dispatch(llmReviewPath, "author")).status, 403);
+  assert.equal((await dispatch(llmReviewPath, "author", llmRule)).status, 403);
+  assert.equal((await dispatch(llmReviewPath, "maintainer", llmRule)).status, 200);
+  assert.equal((await dispatch("/api/submit", "author", checkedRecipe)).status, 503);
+  assert.equal(
+    (await dispatch(llmReviewPath, "maintainer", { ...llmRule, enabled: false })).status,
+    200,
+  );
+
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -296,6 +327,7 @@ try {
   assert.deepEqual(await (await dispatch("/api/settings/openai", "maintainer")).json(), {
     model: null,
     hasCredential: false,
+    reasoningEffort: "",
     encryptionAvailable: false,
     configured: false,
   });
@@ -451,6 +483,7 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
     "/settings",
     "/settings/openai",
     "/settings/code-policy",
+    "/settings/llm-review",
     "/settings/mcp",
     "/recipe/review/route-example/" + routeRevision,
     "/edit/route-example/" + routeRevision,
@@ -940,11 +973,13 @@ describe("hasFields", () => {
   assert.equal(fileNote.line, null);
   assert.equal(fileNote.excerpt, null);
   assert.equal(fileNote.body, fileFeedback.body);
+  assert.equal(fileNote.authorName, "Maija Mäkinen");
   const posted = await dispatch("/api/comment", "maintainer", feedback);
   assert.equal(posted.status, 201);
   const note = await posted.json();
   assert.equal(note.excerpt, "Prefer a stable boundary.");
   assert.equal(note.body, feedback.body);
+  assert.equal(note.authorName, "Maija Mäkinen");
   const blank = await dispatch("/api/comment", "maintainer", { ...feedback, line: 2 });
   assert.equal(blank.status, 201);
   assert.equal((await blank.json()).excerpt, "");
@@ -1364,6 +1399,7 @@ describe("hasFields", () => {
   const deploymentKey = "12".repeat(32);
   const rotatedDeploymentKey = "34".repeat(32);
   let inferenceCalls = 0;
+  let llmReviewCalls = 0;
   const docsMethods = [];
   const provider = {
     bindings: { SETTINGS_ENCRYPTION_KEY: deploymentKey },
@@ -1435,6 +1471,60 @@ describe("hasFields", () => {
       }
       assert.equal(url.pathname, "/v1/responses");
       const body = await request.json();
+      if (body.text?.format?.name === "recipe_review") {
+        llmReviewCalls++;
+        assert.equal(body.model, "gpt-6.2-sol");
+        assert.equal(body.store, false);
+        assert.deepEqual(body.reasoning, { effort: "low" });
+        assert.match(body.instructions, /Require an exact next step/u);
+        assert.deepEqual(
+          JSON.parse(body.input[0].content).map(({ part }) => part),
+          ["documentation"],
+        );
+        if (body.tools?.length) {
+          assert.deepEqual(
+            body.tools.map(({ name }) => name),
+            ["search_openai_docs"],
+          );
+          const last = body.input.at(-1);
+          if (last.role === "user") {
+            return Response.json({
+              status: "completed",
+              output: [
+                {
+                  type: "function_call",
+                  name: "search_openai_docs",
+                  arguments: "{}",
+                  call_id: "review-reference",
+                },
+              ],
+            });
+          }
+          assert.match(last.output, /Public excerpt/u);
+        }
+        const text = JSON.stringify({
+          results: [
+            { part: "documentation", acceptable: false, reason: "Add one concrete next step." },
+          ],
+        });
+        return Response.json({
+          status: "completed",
+          output: [{ type: "message", content: [{ type: "output_text", text }] }],
+        });
+      }
+      if (body.model === "gpt-6.2-sol") {
+        assert.deepEqual(body.reasoning, { effort: "low" });
+        assert.equal(body.max_output_tokens, 4096);
+        return Response.json({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: "Reasoning fixture passed." }],
+            },
+          ],
+        });
+      }
       assert.equal(body.model, model);
       assert.equal(body.store, false);
       assert.equal(body.parallel_tool_calls, false);
@@ -1568,6 +1658,7 @@ describe("hasFields", () => {
   assert.deepEqual(await savedOpenAi.json(), {
     model: null,
     hasCredential: true,
+    reasoningEffort: "",
     encryptionAvailable: true,
     configured: false,
   });
@@ -1671,6 +1762,93 @@ describe("hasFields", () => {
   const limited = await dispatch("/api/assistant", "maintainer", { question: "Try again." });
   assert.equal(limited.status, 429);
   assert.doesNotMatch(await limited.text(), /Private provider failure/);
+  const withReference = { ...llmRule, referenceQuery: "Responses streaming" };
+  assert.equal((await dispatch(llmReviewPath, "maintainer", withReference)).status, 200);
+  assert.equal((await dispatch("/api/submit", "author", checkedRecipe)).status, 503);
+  assert.equal((await dispatch(docsMcpPath, "maintainer", { enabled: true })).status, 200);
+  const reviewWarning = await dispatch("/api/submit", "author", checkedRecipe);
+  assert.equal(reviewWarning.status, 409);
+  const { code, reviewReceipt } = await reviewWarning.json();
+  assert.equal(code, "llm_warning");
+  assert.match(reviewReceipt, /^[a-f0-9-]{36}$/u);
+  const accepted = await dispatch("/api/submit", "author", { ...checkedRecipe, reviewReceipt });
+  assert.equal(accepted.status, 201);
+  const acceptedRecipe = await accepted.json();
+  assert.equal(llmReviewCalls, 2);
+  const edited = await dispatch("/api/submit", "author", {
+    ...checkedRecipe,
+    title: "Updated title without new prose",
+    replace: acceptedRecipe.id,
+    editVersion: acceptedRecipe.editVersion,
+  });
+  assert.equal(edited.status, 200);
+  assert.equal(llmReviewCalls, 2);
+  assert.equal((await dispatch(docsMcpPath, "maintainer", { enabled: false })).status, 200);
+  const reviewed = await tool(
+    "get_recipe",
+    { slug: checkedRecipe.slug, revision: acceptedRecipe.id },
+    "maintainer",
+  );
+  assert.deepEqual(reviewed.llmWarnings, [
+    { part: "documentation", reason: "Add one concrete next step." },
+  ]);
+  assert.equal(
+    (
+      await dispatch(llmReviewPath, "maintainer", {
+        ...llmRule,
+        rules: {
+          documentation: { ...llmRule.rules.documentation, mode: "error" },
+        },
+      })
+    ).status,
+    200,
+  );
+  const blockedAttempt = await dispatch("/mcp", "author", {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "submit_recipe",
+      arguments: {
+        ...checkedRecipe,
+        files: { documentation: "Review this materially different documentation snapshot." },
+        replace: acceptedRecipe.id,
+        editVersion: (await edited.json()).editVersion,
+        reviewReceipt,
+      },
+    },
+  });
+  const blockedResult = (await blockedAttempt.json()).result;
+  assert.equal(blockedResult.isError, true);
+  assert.match(blockedResult.content[0].text, /LLM review blocked/u);
+  assert.equal(llmReviewCalls, 3);
+  assert.equal(
+    (await dispatch(llmReviewPath, "maintainer", { ...llmRule, enabled: false })).status,
+    200,
+  );
+  assert.equal(
+    (
+      await dispatch("/api/settings/openai", "maintainer", {
+        model: "gpt-6.2-sol",
+        reasoningEffort: "none",
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await dispatch("/api/settings/openai", "maintainer", {
+        model: "gpt-6.2-sol",
+        reasoningEffort: "low",
+      })
+    ).status,
+    200,
+  );
+  const reasoningAnswer = await dispatch("/api/assistant", "maintainer", {
+    question: "Verify reasoning.",
+  });
+  assert.equal((await reasoningAnswer.json()).answer, "Reasoning fixture passed.");
+  assert.equal((await dispatch("/api/settings/openai", "maintainer", { model })).status, 200);
   const activeSecretsDb = await runtime.getD1Database("DB");
   await activeSecretsDb
     .prepare("UPDATE openai_settings SET credential = ? WHERE id = 1")
@@ -1704,6 +1882,7 @@ describe("hasFields", () => {
   assert.deepEqual(await removedKey.json(), {
     model,
     hasCredential: false,
+    reasoningEffort: "",
     encryptionAvailable: true,
     configured: false,
   });

@@ -1,6 +1,13 @@
 import { isArray, isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
+import { effectiveReasoning, reasoningOptions } from "./reasoning.ts";
+import {
+  llmReviewPolicy,
+  readLlmReviewPolicy,
+  saveLlmReviewPolicy,
+} from "./llm-review-settings.ts";
+import { reviewSubmission } from "./submission-review.ts";
 import {
   docsMcpEnabled,
   enabledSkills,
@@ -44,6 +51,7 @@ const openAiPaths = new Set([
   "/api/assistant/models",
   "/api/settings/openai",
   "/api/settings/openai/remove-key",
+  "/api/settings/llm-review",
 ]);
 const mcpSettingsPath = "/api/settings/mcp";
 const mcpCheckPath = mcpSettingsPath + "/check";
@@ -128,6 +136,11 @@ const tools = [
       allowDuplicates: {
         type: "boolean",
         description: "Acknowledge duplicate warnings. Cannot override an error.",
+      },
+      reviewReceipt: {
+        type: "string",
+        description:
+          "Acknowledge the LLM warnings by returning the receipt from the same submission.",
       },
       files: {
         type: "object",
@@ -265,9 +278,10 @@ async function currentMcpTools(db: Database) {
  * Handle a JSON-RPC request against the MCP recipe tools.
  * @param request The incoming MCP HTTP request.
  * @param cookbook The recipe service for the caller, or null when signed out.
- * @param db The instance database holding MCP settings.
+ * @param env Deployment bindings for MCP settings and submission checks.
  */
-async function mcp(request: Request, cookbook: Cookbook | null, db: Database) {
+async function mcp(request: Request, cookbook: Cookbook | null, env: Env) {
+  const db = env.DB;
   const rpc = await body(request);
   const { method, id = null } = rpc;
   /**
@@ -335,7 +349,9 @@ async function mcp(request: Request, cookbook: Cookbook | null, db: Database) {
         value = await cookbook.get(input);
         break;
       case "submit_recipe":
-        value = await cookbook.submit(input);
+        value = await cookbook.submit(input, (candidate) =>
+          reviewSubmission(db, env.SETTINGS_ENCRYPTION_KEY, candidate),
+        );
         break;
       case "my_revisions":
         value = await cookbook.queue(input, true);
@@ -361,6 +377,20 @@ async function mcp(request: Request, cookbook: Cookbook | null, db: Database) {
         structuredContent: { code: error.code, error: detail },
       });
     }
+    if (error instanceof RequestError && error.code === "llm_warning") {
+      return result({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text:
+              detail +
+              "\nRetry with the same files and reviewReceipt only after acknowledging these warnings.",
+          },
+        ],
+        structuredContent: { code: error.code, error: detail, reviewReceipt: error.receipt },
+      });
+    }
     return result({ isError: true, content: [{ type: "text", text: detail }] });
   }
 }
@@ -371,10 +401,11 @@ async function mcp(request: Request, cookbook: Cookbook | null, db: Database) {
  * @param cookbook Cookbook with the verified maintainer identity.
  */
 async function openAiStatus(env: Env, cookbook: Cookbook) {
-  const { model, hasCredential } = await cookbook.openAiSettings();
+  const { model, hasCredential, reasoningEffort } = await cookbook.openAiSettings();
   const encryptionAvailable = isSettingsKey(env.SETTINGS_ENCRYPTION_KEY);
   return {
     model,
+    reasoningEffort,
     hasCredential,
     encryptionAvailable,
     configured: hasCredential && isOpenAiModel(model) && encryptionAvailable,
@@ -395,7 +426,16 @@ async function saveOpenAi(request: Request, env: Env, cookbook: Cookbook) {
     throw new RequestError("Enter a valid OpenAI model identifier.");
   }
   const key = input.apiKey;
-  if (key === undefined && model === undefined) {
+  const effort = str(input.reasoningEffort, "reasoning effort", 12, true);
+  if (
+    effort &&
+    !reasoningOptions(model ?? (await cookbook.openAiSettings()).model ?? "").some(
+      (level) => level === effort,
+    )
+  ) {
+    throw new RequestError("Choose a reasoning effort supported by this model.");
+  }
+  if (key === undefined && model === undefined && input.reasoningEffort === undefined) {
     throw new RequestError("Enter an OpenAI API key or choose a model.");
   }
   if (
@@ -407,7 +447,11 @@ async function saveOpenAi(request: Request, env: Env, cookbook: Cookbook) {
   await cookbook.reserveOpenAiRequest("settings");
   const credential =
     key === undefined ? null : await sealOpenAiKey(env.SETTINGS_ENCRYPTION_KEY, key);
-  await cookbook.saveOpenAiSettings(model ?? null, credential);
+  await cookbook.saveOpenAiSettings(
+    model ?? null,
+    credential,
+    input.reasoningEffort === undefined ? null : effort,
+  );
   return json(await openAiStatus(env, cookbook));
 }
 
@@ -426,6 +470,7 @@ async function openAiConnection(env: Env, cookbook: Cookbook, action: "ask" | "c
   await cookbook.reserveOpenAiRequest(action);
   return {
     model: stored.model,
+    reasoningEffort: effectiveReasoning(stored.model, stored.reasoning_effort),
     key: await openOpenAiKey(env.SETTINGS_ENCRYPTION_KEY, stored.credential),
   };
 }
@@ -559,6 +604,29 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   return json({ answer, sources: [...sources.values()], docsSources });
 }
 
+/**
+ * Read a display name from the hosting platform's verified identity headers.
+ * @param headers Authenticated identity headers from the Sites gateway.
+ * @param email Verified account email, used only for its local part as a display fallback.
+ */
+function authenticatedDisplayName(headers: Headers, email?: string) {
+  let name = headers.get("oai-authenticated-user-full-name") ?? "";
+  if (headers.get("oai-authenticated-user-full-name-encoding") === "percent-encoded-utf-8") {
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      name = "";
+    }
+  }
+  const fallback = email?.split("@")[0] ?? "";
+  return (
+    (name || fallback)
+      .replace(/[\p{Cc}\p{Cf}]/gu, "")
+      .trim()
+      .slice(0, 100) || undefined
+  );
+}
+
 export default {
   /**
    * Route application, API, and MCP traffic in the Worker.
@@ -588,9 +656,15 @@ export default {
           .split(",")
           .map((v) => v.trim())
           .includes(email);
-      const cookbook = id ? new Cookbook(env.DB, { id, maintainer }) : null;
+      const cookbook = id
+        ? new Cookbook(env.DB, {
+            id,
+            maintainer,
+            displayName: authenticatedDisplayName(request.headers, email),
+          })
+        : null;
       if (url.pathname === "/mcp" && request.method === "POST") {
-        return await mcp(request, cookbook, env.DB);
+        return await mcp(request, cookbook, env);
       }
       if (!url.pathname.startsWith("/api/")) {
         return json({ error: "Page not found." }, 404);
@@ -625,6 +699,8 @@ export default {
           }
           case "/api/settings/openai":
             return json(await openAiStatus(env, cookbook));
+          case "/api/settings/llm-review":
+            return json(await readLlmReviewPolicy(env.DB));
           case mcpSettingsPath:
             return json({ ...(await readMcpSettings(env.DB, toolNames)), tools });
           case mcpCheckPath:
@@ -666,6 +742,18 @@ export default {
         if (url.pathname === "/api/settings/openai") {
           return await saveOpenAi(request, env, cookbook);
         }
+        if (url.pathname === "/api/settings/llm-review") {
+          const policy = llmReviewPolicy(await body(request));
+          const model = policy.model || (await cookbook.openAiSettings()).model || "";
+          if (
+            (policy.model && !isOpenAiModel(policy.model)) ||
+            (policy.reasoningEffort &&
+              !reasoningOptions(model).some((effort) => effort === policy.reasoningEffort))
+          ) {
+            throw new RequestError("Choose a valid review model and a supported reasoning effort.");
+          }
+          return json(await saveLlmReviewPolicy(env.DB, policy));
+        }
         if (url.pathname === mcpSettingsPath) {
           return json(await saveMcpSettings(env.DB, await body(request), toolNames));
         }
@@ -687,7 +775,9 @@ export default {
           return await askAssistant(request, env, cookbook);
         }
         if (url.pathname === "/api/submit") {
-          const result = await cookbook.submit(await body(request));
+          const result = await cookbook.submit(await body(request), (candidate) =>
+            reviewSubmission(env.DB, env.SETTINGS_ENCRYPTION_KEY, candidate),
+          );
           return json(result, result.editVersion > 0 ? 200 : 201);
         }
         if (url.pathname === "/api/comment") {
@@ -712,7 +802,11 @@ export default {
         return json({ error: "The OpenAI operation failed. Please retry." }, 500);
       }
       return json(
-        { error: message(error), code: error instanceof RequestError ? error.code : undefined },
+        {
+          error: message(error),
+          code: error instanceof RequestError ? error.code : undefined,
+          reviewReceipt: error instanceof RequestError ? error.receipt : undefined,
+        },
         error instanceof SettingsCryptoError
           ? 503
           : error instanceof RequestError ||

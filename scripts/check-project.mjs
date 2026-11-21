@@ -10,6 +10,7 @@ const sourceRoot = resolve("src");
 const browserFiles = new Set(["browser.js", "browser-api.js", "localization.js"]);
 const baseFiles = new Set([
   "guards.ts",
+  "reasoning.ts",
   "line-diff.ts",
   "contracts.ts",
   "read-json-object.ts",
@@ -43,11 +44,14 @@ function layer(file) {
   if (path.startsWith("quality/") || ["format.ts", "code-policy.ts"].includes(path)) {
     return "quality";
   }
-  if (["store.ts", "mcp-settings.ts"].includes(path)) {
+  if (["store.ts", "mcp-settings.ts", "llm-review-settings.ts"].includes(path)) {
     return "storage";
   }
   if (["openai.ts", "openai-docs-mcp.ts", "settings-crypto.ts"].includes(path)) {
     return "provider";
+  }
+  if (path === "submission-review.ts") {
+    return "service";
   }
   if (path === "index.ts") {
     return "entry";
@@ -64,7 +68,8 @@ const allowedLayers = {
   quality: ["base", "quality"],
   storage: ["base", "quality", "storage"],
   provider: ["base"],
-  entry: ["base", "quality", "storage", "provider", "asset"],
+  service: ["base", "quality", "storage", "provider"],
+  entry: ["base", "quality", "storage", "provider", "asset", "service"],
   asset: ["asset"],
 };
 
