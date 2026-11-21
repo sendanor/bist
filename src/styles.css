@@ -1508,7 +1508,9 @@ main,
 
 @media (min-width: 1050px) {
   .workspace:has(#assistant-panel:not([hidden])) {
-    grid-template-columns: minmax(0, 1fr) clamp(20rem, 28vw, 31rem);
+    grid-template-columns:
+      minmax(0, 1fr)
+      min(var(--assistant-width, clamp(20rem, 28vw, 31rem)), calc(100% - 22.5rem));
   }
 
   #assistant-panel {
@@ -1518,6 +1520,26 @@ main,
     height: calc(100dvh - var(--top-height));
     border-bottom: 0;
     border-inline-start: 1px solid var(--line);
+  }
+}
+
+#assistant-resize {
+  display: none;
+}
+
+@media (min-width: 1050px) {
+  #assistant-resize {
+    position: absolute;
+    inset: 0 auto 0 -5px;
+    display: block;
+    width: 10px;
+    cursor: col-resize;
+    touch-action: none;
+  }
+
+  #assistant-resize:hover,
+  #assistant-resize:focus-visible {
+    background: var(--line);
   }
 }
 
@@ -1650,4 +1672,22 @@ main,
 
 .earlier-comments h4 {
   margin-block: 16px 6px;
+}
+
+.assistant-add-ons {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.assistant-add-on small {
+  display: block;
+  padding: 4px 12px 0;
+}
+
+.assistant-add-on small a {
+  text-decoration: underline;
 }

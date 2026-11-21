@@ -57,13 +57,13 @@ if a client has cached an older tool list. The MCP endpoint still responds to di
 when paused. Existing client and recipe permissions continue to apply, and the browser
 workflow and built-in OpenAI assistant use their own application routes.
 
-**Settings → MCP → Assistant connection** can enable the public OpenAI Docs lookup.
+**Settings → MCP → Assistant add-ons** can enable the public OpenAI Docs lookup.
 It is off by default. After enabling it, open **Search documentation** in **Assistant**
 and enter public search terms alongside a question. Bist makes at most one documentation search per question.
 The MCP endpoint receives only those terms. The Assistant displays links returned by
 the documentation service. [OpenAI Docs MCP](https://developers.openai.com/learn/docs-mcp)
 
-Enable **Context7 connection** separately to look up public library documentation.
+Enable **Context7** in the same list to look up public library documentation.
 In **Assistant**, enter public search terms and an exact library ID such as
 `/react/react`. Bist sends those two fields to Context7. Leave the library ID blank
 to use the OpenAI Docs connection, if enabled. [Context7 MCP tools](https://context7.com/docs/resources/all-clients)
@@ -98,14 +98,15 @@ may be asked to retry a submission while that work finishes. See the
 
 ## Use agent skills
 
-In **Settings → MCP → Assistant response skills**, maintainers enable built-in skills
+In **Settings → MCP → Assistant add-ons**, maintainers enable built-in skills
 for this instance. The model can load an enabled skill when it fits the task.
 Caveman and Suomen kieli are enabled by default. Maintainers can also enable the CMS
 skills for SEO and social previews, layout, importing source material, and checking
 drafts before publication. An empty saved selection disables skill loading.
 
 Open **Assistant** from the top bar on any page. It docks to the right when the window
-is wide enough and appears above the page content in narrower windows. Messages and
+is wide enough. Drag its left edge or focus the divider and use the arrow keys to resize it.
+In narrower windows it appears above the page content. Messages and
 the current draft stay in the panel while you navigate. CMS skills use the information
 and tools available in Bist.
 
@@ -116,6 +117,20 @@ with skill metadata. If the recipe has only documentation, the export uses that 
 Review the file before installing it. For project-scoped Codex use, save it as
 `.agents/skills/<skill-name>/SKILL.md`, using the manifest's `name` for the folder,
 then start a new Codex session. [Codex skill installation](https://developers.openai.com/api/reference/cli)
+
+## Configure LLM review
+
+**Settings → LLM review** controls the review model, reasoning effort, and instructions
+for each recipe file type. Choose **Warn** to let the author acknowledge a finding
+and continue, or **Block** to require a correction. The review page shows acknowledged
+warnings for the saved revision. The check sends only the configured new or changed
+file content to OpenAI. Reading a recipe or editing only its metadata makes no review
+request. With review enabled, submissions that require it fail when the provider cannot
+run the check.
+
+Optionally enter a public MCP reference query under **LLM review**. Enable OpenAI Docs
+or Context7 in **Assistant add-ons** so the model can look up that reference when it
+needs it. The MCP server receives the configured public query and optional library ID.
 
 ## Run a recipe's tests
 

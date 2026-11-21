@@ -3,6 +3,7 @@ import { api } from "./browser-api.js";
 import cssLanguage from "highlight.js/lib/languages/css";
 import { diffLines, sourceLines } from "./line-diff.ts";
 import { parsePagePath } from "./routes.ts";
+import { effectiveReasoning, reasoningOptions } from "./reasoning.ts";
 import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import highlighter from "highlight.js/lib/core";
@@ -21,6 +22,7 @@ const assistantToggle = document.querySelector("#assistant-toggle");
 const assistantPanel = document.querySelector("#assistant-panel");
 const assistantView = document.querySelector("#assistant-view");
 const assistantClose = document.querySelector("#assistant-close");
+const assistantResize = document.querySelector("#assistant-resize");
 const labels = {
   library: t("recipe-library"),
   contribute: t("contribute"),
@@ -342,7 +344,14 @@ function listingForm(section, filters, tags) {
   const review = section === "review";
   const status = el(
     "select",
-    { name: "state" },
+    {
+      name: "state",
+      /**
+       * Apply the chosen status with the other search terms from the current form.
+       * @param event Change made in the review status selector.
+       */
+      onchange: (event) => event.currentTarget.form.requestSubmit(),
+    },
     el("option", { value: "" }, t("all-statuses")),
     el("option", { value: "pending" }, t("pending-review")),
     el("option", { value: "approved" }, t("approved")),
@@ -498,17 +507,18 @@ if (actual !== "[[1,2],[3]]") {
   },
 };
 /**
- * Ask whether to save a submission that matched an existing recipe's content.
- * @param message Duplicate findings returned by the server.
+ * Ask whether to submit after reviewing acknowledgeable findings.
+ * @param message Findings returned by the server.
+ * @param heading The visible warning category.
  */
-function confirmDuplicate(message) {
+function confirmSubmissionWarning(message, heading) {
   return new Promise((resolve) => {
     const cancel = btn(t("cancel"), () => dialog.close());
     const proceed = btn(t("submit-anyway"), () => dialog.close("continue"), "primary");
     const dialog = el(
       "dialog",
-      { className: "revision-dialog", "aria-labelledby": "duplicate-heading" },
-      el("h2", { id: "duplicate-heading" }, t("duplicate-content")),
+      { className: "revision-dialog", "aria-labelledby": "submission-warning-heading" },
+      el("h2", { id: "submission-warning-heading" }, heading),
       el("p", { className: "duplicate-message" }, message),
       el("div", { className: "revision-dialog-buttons" }, cancel, proceed),
     );
@@ -527,20 +537,33 @@ function confirmDuplicate(message) {
 }
 
 /**
- * Submit a recipe and retry only if the author accepts any duplicate warning.
+ * Retry a complete snapshot only after the author accepts each warning.
  * @param payload Complete recipe snapshot read from the submission form.
  */
-async function submitWithDuplicateCheck(payload) {
-  try {
-    return await api("submit", payload);
-  } catch (error) {
-    if (error.code !== "duplicate_warning") {
-      throw error;
+async function submitWithWarnings(payload) {
+  let attempt = payload;
+  for (;;) {
+    try {
+      return await api("submit", attempt);
+    } catch (error) {
+      if (error.code === "duplicate_warning" && !attempt.allowDuplicates) {
+        if (!(await confirmSubmissionWarning(error.message, t("duplicate-content")))) {
+          return null;
+        }
+        attempt = { ...attempt, allowDuplicates: true };
+      } else if (
+        error.code === "llm_warning" &&
+        error.reviewReceipt &&
+        error.reviewReceipt !== attempt.reviewReceipt
+      ) {
+        if (!(await confirmSubmissionWarning(error.message, t("llm-review-warnings")))) {
+          return null;
+        }
+        attempt = { ...attempt, reviewReceipt: error.reviewReceipt };
+      } else {
+        throw error;
+      }
     }
-    if (await confirmDuplicate(error.message)) {
-      return api("submit", { ...payload, allowDuplicates: true });
-    }
-    return null;
   }
 }
 
@@ -690,7 +713,7 @@ async function contribute(recipe, replace = false) {
         submit.disabled = true;
         banner();
         try {
-          const result = await submitWithDuplicateCheck({
+          const result = await submitWithWarnings({
             slug: data.slug,
             title: data.title,
             summary: data.summary,
@@ -1206,7 +1229,7 @@ function reviewCommentText(comment) {
   return el(
     "div",
     { className: "review-comment" },
-    el("strong", {}, t("reviewer")),
+    el("strong", {}, comment.authorName || t("reviewer")),
     el("p", {}, comment.body),
   );
 }
@@ -1667,6 +1690,19 @@ async function recipePage(section, slug, revision) {
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
       recipe.removal_reason &&
         el("p", { className: "panel" }, t("removal-requested") + recipe.removal_reason),
+      recipe.llmWarnings?.length &&
+        el(
+          "section",
+          { className: "panel" },
+          el("h2", {}, t("llm-review-acknowledged")),
+          el(
+            "ul",
+            {},
+            ...recipe.llmWarnings.map(({ part, reason }) =>
+              el("li", {}, el("strong", {}, parts[part]), " — ", reason),
+            ),
+          ),
+        ),
       fileViewer(recipe, base),
       el(
         "dl",
@@ -1679,13 +1715,34 @@ async function recipePage(section, slug, revision) {
 }
 
 /**
- * Load the saved key's catalog and let the maintainer save a model independently.
+ * Populate reasoning choices using the selected model's documented capabilities.
+ * @param select The reasoning control associated with the model.
+ * @param model The exact selected model ID.
+ * @param saved Previously selected effort to retain when supported.
+ */
+function updateReasoningChoices(select, model, saved) {
+  const options = reasoningOptions(model);
+  const defaultEffort = effectiveReasoning(model, "");
+  select.replaceChildren(
+    el(
+      "option",
+      { value: "" },
+      t("openai-model-default") + (defaultEffort ? " (" + defaultEffort + ")" : ""),
+    ),
+    ...options.map((effort) => el("option", { value: effort }, effort)),
+  );
+  select.value = options.includes(saved) ? saved : "";
+}
+
+/**
+ * Load the saved key's catalog and let the maintainer save the conversation model and effort.
  * @param initial Saved model and key status.
  */
 function openAiModelPicker(initial) {
   let state = initial;
   let request = 0;
   const select = el("select", { name: "model", required: "" });
+  const reasoning = el("select", { name: "reasoningEffort" });
   const status = el("p", { role: "status", className: "muted" });
   const save = el("button", { type: "submit", className: "primary" }, t("openai-save-model"));
   const refreshButton = btn(t("openai-load-models"), () => void refresh());
@@ -1696,6 +1753,7 @@ function openAiModelPicker(initial) {
     const current = ++request;
     select.replaceChildren(el("option", { value: "" }, t("openai-choose-model")));
     select.disabled = true;
+    reasoning.disabled = true;
     save.disabled = true;
     refreshButton.disabled = true;
     if (!state.hasCredential || !state.encryptionAvailable) {
@@ -1711,8 +1769,19 @@ function openAiModelPicker(initial) {
       if (catalog.status === "ready" && catalog.models.length) {
         select.append(...catalog.models.map((model) => el("option", { value: model }, model)));
         select.disabled = false;
-        select.value = catalog.models.includes(state.model) ? state.model : "";
+        select.value = catalog.models.includes(state.model)
+          ? state.model
+          : catalog.models.includes("gpt-6.2-sol")
+            ? "gpt-6.2-sol"
+            : "";
         status.textContent = state.model && !select.value ? t("assistant-model-missing") : "";
+        reasoning.disabled = false;
+        updateReasoningChoices(
+          reasoning,
+          select.value,
+          state.model === select.value ? state.reasoningEffort : "",
+        );
+        save.disabled = !select.value || select.value === state.model;
       } else if (catalog.status === "unauthorized") {
         status.textContent = t("assistant-model-unauthorized");
       } else {
@@ -1729,7 +1798,16 @@ function openAiModelPicker(initial) {
     }
   }
   select.addEventListener("change", () => {
+    updateReasoningChoices(
+      reasoning,
+      select.value,
+      select.value === state.model ? state.reasoningEffort : "",
+    );
     save.disabled = !select.value || select.value === state.model;
+  });
+  reasoning.addEventListener("change", () => {
+    save.disabled =
+      !select.value || (select.value === state.model && reasoning.value === state.reasoningEffort);
   });
   const form = el(
     "form",
@@ -1750,7 +1828,7 @@ function openAiModelPicker(initial) {
         select.disabled = true;
         refreshButton.disabled = true;
         try {
-          const updated = await api("settings/openai", { model });
+          const updated = await api("settings/openai", { model, reasoningEffort: reasoning.value });
           if (current === request) {
             state = updated;
             status.textContent = t("openai-model-saved");
@@ -1770,6 +1848,7 @@ function openAiModelPicker(initial) {
     },
     el("h2", {}, t("openai-model")),
     el("label", {}, t("openai-choose-model"), select),
+    el("label", {}, t("openai-reasoning-effort"), reasoning),
     el("div", { className: "actions" }, save, refreshButton),
     status,
   );
@@ -2206,9 +2285,26 @@ function closeAssistant() {
   assistantToggle.focus();
 }
 
+/**
+ * Resize the open desktop chat without squeezing the page below its minimum width.
+ * @param requested The new width in CSS pixels, or the current width to announce.
+ */
+function resizeAssistant(requested) {
+  const workspace = assistantPanel.parentElement;
+  const maximum = Math.max(300, Math.min(800, workspace.clientWidth - 360));
+  const width = Math.round(assistantPanel.getBoundingClientRect().width);
+  const actual = Math.min(maximum, Math.max(300, requested ?? width));
+  if (requested !== undefined) {
+    workspace.style.setProperty("--assistant-width", actual + "px");
+  }
+  assistantResize.setAttribute("aria-valuemax", String(maximum));
+  assistantResize.setAttribute("aria-valuenow", String(actual));
+}
+
 /** Open the Assistant beside the current page, loading its form on first use. */
 async function openAssistant() {
   assistantPanel.hidden = false;
+  resizeAssistant();
   assistantToggle.setAttribute("aria-expanded", "true");
   assistantClose.focus();
   const question = assistantView.querySelector('[name="question"]');
@@ -2309,80 +2405,233 @@ async function mcpSettingsForm() {
   );
 }
 
-/**
- * Build an independent opt-in form for a public documentation MCP provider.
- * @param context7 Whether to configure Context7 instead of OpenAI Docs.
- */
-async function assistantMcpForm(context7 = false) {
-  const path = context7 ? "settings/mcp/context7" : "settings/mcp/openai-docs";
-  const { enabled } = await api(path);
-  const control = el("input", { type: "checkbox", name: "enabled" });
-  control.checked = enabled;
+/** List every Assistant integration and save each switch as an independent setting. */
+async function assistantAddOns() {
+  const [openAi, context7, policy] = await Promise.all([
+    api("settings/mcp/openai-docs"),
+    api("settings/mcp/context7"),
+    api("settings/mcp/skills"),
+  ]);
+  let enabled = policy.enabled;
+  const details = {
+    caveman: [
+      t("skill-caveman-description"),
+      "cms-assistant-skill-caveman/af8ed8d9-e24f-4db3-b9f4-d40af87771a4",
+    ],
+    suomenkieli: [
+      t("skill-finnish-description"),
+      "cms-assistant-skill-finnish/6bd4384b-3496-4778-8cbe-a57f91c8535f",
+    ],
+    seo: [
+      t("skill-seo-description"),
+      "cms-assistant-skill-seo/f21ae44b-dcf9-4cb0-9aba-ead2c514fa16",
+    ],
+    design: [
+      t("skill-design-description"),
+      "cms-assistant-skill-design/ea7aef17-bb39-4e44-87ad-718f225930fd",
+    ],
+    import: [
+      t("skill-import-description"),
+      "cms-assistant-skill-import/3aa2200b-08a2-4965-91bc-b97136fde80d",
+    ],
+    publication: [
+      t("skill-publication-description"),
+      "cms-assistant-skill-publication/c7e20f8f-d706-4788-a70a-7d81f49314a1",
+    ],
+  };
   const status = el("p", { role: "status", className: "muted" });
-  const save = el(
-    "button",
-    { className: "primary", type: "submit" },
-    context7 ? t("mcp-save-context7") : t("mcp-save-docs"),
+  const fields = el("fieldset", { className: "assistant-add-ons" });
+  /**
+   * Render and persist a single integration switch.
+   * @param title Name of the skill or MCP provider.
+   * @param description Short description of what the integration does.
+   * @param active The currently saved toggle state.
+   * @param save Callback that atomically persists this row's new state.
+   * @param metadata Attribution, licensing and source links for the row.
+   */
+  function row(title, description, active, save, metadata) {
+    const control = el("input", { type: "checkbox" });
+    control.checked = active;
+    control.addEventListener("change", async () => {
+      const next = control.checked;
+      fields.disabled = true;
+      status.textContent = "";
+      try {
+        await save(next);
+        status.textContent = t("mcp-skills-saved");
+      } catch (error) {
+        control.checked = !next;
+        status.textContent = error.message;
+      } finally {
+        fields.disabled = false;
+      }
+    });
+    return el(
+      "div",
+      { className: "assistant-add-on" },
+      el(
+        "label",
+        { className: "setting-toggle" },
+        el(
+          "span",
+          {},
+          el("strong", {}, title),
+          el("br"),
+          el("span", { className: "muted" }, description),
+        ),
+        control,
+      ),
+      el("small", { className: "muted" }, ...metadata),
+    );
+  }
+  fields.append(
+    ...policy.skills.map((id) => {
+      const [description, source] = details[id];
+      return row(
+        responseSkillLabels[id],
+        description,
+        enabled.includes(id),
+        async (selected) => {
+          const next = selected ? [...enabled, id] : enabled.filter((current) => current !== id);
+          ({ enabled } = await api("settings/mcp/skills", { enabled: next }));
+        },
+        [
+          t("skill-author"),
+          " · ",
+          el(
+            "a",
+            { href: "https://github.com/sendanor/bist/blob/HEAD/LICENSE" },
+            t("skill-license"),
+          ),
+          " · ",
+          el("a", { href: "/recipe/review/" + source }, t("skill-source")),
+          id === "caveman" && " · ",
+          id === "caveman" &&
+            el(
+              "a",
+              { href: "https://github.com/JuliusBrussee/caveman/tree/main/skills/caveman" },
+              t("skill-caveman-upstream"),
+            ),
+        ],
+      );
+    }),
+    row(
+      t("mcp-assistant-connection"),
+      t("mcp-assistant-docs-help"),
+      openAi.enabled,
+      (enabled) => api("settings/mcp/openai-docs", { enabled }),
+      [
+        t("mcp-openai-publisher"),
+        " · ",
+        el("a", { href: "https://developers.openai.com/learn/docs-mcp" }, t("mcp-provider-docs")),
+      ],
+    ),
+    row(
+      t("mcp-context7-connection"),
+      t("mcp-context7-help"),
+      context7.enabled,
+      (enabled) => api("settings/mcp/context7", { enabled }),
+      [
+        t("mcp-context7-publisher"),
+        " · ",
+        el(
+          "a",
+          { href: "https://context7.com/docs/resources/all-clients" },
+          t("mcp-provider-docs"),
+        ),
+      ],
+    ),
   );
   return el(
-    "form",
-    {
-      className: "panel form",
-      /**
-       * Save the opt-in setting independently of the tools exposed by the Bist server.
-       * @param event Submission from the assistant connection form.
-       */
-      onsubmit: async (event) => {
-        event.preventDefault();
-        save.disabled = true;
-        status.textContent = "";
-        try {
-          await api(path, { enabled: control.checked });
-          status.textContent = t("mcp-docs-saved");
-        } catch (error) {
-          status.textContent = error.message;
-        } finally {
-          save.disabled = false;
-        }
-      },
-    },
-    el("h2", {}, context7 ? t("mcp-context7-connection") : t("mcp-assistant-connection")),
-    el(
-      "p",
-      { className: "muted" },
-      context7 ? t("mcp-context7-help") : t("mcp-assistant-docs-help"),
-    ),
-    el(
-      "label",
-      { className: "setting-toggle" },
-      context7 ? t("mcp-context7-enable") : t("mcp-assistant-docs"),
-      control,
-    ),
-    el("div", { className: "actions" }, save, status),
+    "section",
+    { className: "panel form" },
+    el("h2", {}, t("mcp-response-skills")),
+    fields,
+    status,
   );
 }
 
-/** Build the maintainer form for response skill availability across the instance. */
-async function responseSkillsForm() {
-  const { enabled, skills } = await api("settings/mcp/skills");
-  const status = el("p", { role: "status", className: "muted" });
-  const save = el("button", { className: "primary", type: "submit" }, t("mcp-save-skills"));
+/** Configure which new file parts receive an advisory or blocking OpenAI review. */
+async function llmReviewForm() {
+  const policy = await api("settings/llm-review");
+  const openAi = await api("settings/openai");
+  const enabled = el("input", { type: "checkbox" });
+  enabled.checked = policy.enabled;
+  const modelField = field(
+    "model",
+    t("llm-review-model"),
+    {
+      maxlength: 100,
+      placeholder: openAi.model ?? "",
+      list: "llm-review-models",
+    },
+    policy.model,
+  );
+  const model = modelField.querySelector("input");
+  const reasoning = el("select");
+  const reference = field(
+    "referenceQuery",
+    t("llm-review-reference-query"),
+    { maxlength: 160 },
+    policy.referenceQuery,
+  );
+  const referenceLibrary = field(
+    "referenceLibraryId",
+    t("llm-review-reference-library"),
+    { maxlength: 160 },
+    policy.referenceLibraryId,
+  );
+  updateReasoningChoices(reasoning, model.value || openAi.model || "", policy.reasoningEffort);
+  model.addEventListener("input", () => {
+    updateReasoningChoices(reasoning, model.value.trim() || openAi.model || "", reasoning.value);
+  });
+  const rules = Object.entries(parts).map(([part, title]) => {
+    const mode = el(
+      "select",
+      {},
+      el("option", { value: "off" }, t("llm-review-off")),
+      el("option", { value: "warn" }, t("llm-review-warn")),
+      el("option", { value: "error" }, t("llm-review-block")),
+    );
+    mode.value = policy.rules[part]?.mode ?? "off";
+    const fieldset = field(
+      "instruction",
+      t("llm-review-instruction"),
+      { maxlength: 2000, rows: 2 },
+      policy.rules[part]?.instruction ?? "",
+      true,
+    );
+    return { part, title, mode, fieldset, instruction: fieldset.querySelector("textarea") };
+  });
+  const save = el("button", { type: "submit", className: "primary" }, t("llm-review-save"));
+  const status = el("p", { role: "status" });
   return el(
     "form",
     {
       className: "panel form",
       /**
-       * Persist the selected skill identifiers, including an empty selection.
-       * @param event Submission from the response skills settings form.
+       * Save the complete review policy for subsequent submissions.
+       * @param event Submission from the review settings form.
        */
       onsubmit: async (event) => {
         event.preventDefault();
-        const selection = new FormData(event.currentTarget).getAll("skill");
         save.disabled = true;
         status.textContent = "";
         try {
-          await api("settings/mcp/skills", { enabled: selection });
-          status.textContent = t("mcp-skills-saved");
+          await api("settings/llm-review", {
+            enabled: enabled.checked,
+            model: model.value.trim(),
+            reasoningEffort: reasoning.value,
+            referenceQuery: reference.querySelector("input").value.trim(),
+            referenceLibraryId: referenceLibrary.querySelector("input").value.trim(),
+            rules: Object.fromEntries(
+              rules.map(({ part, mode, instruction }) => [
+                part,
+                { mode: mode.value, instruction: instruction.value.trim() },
+              ]),
+            ),
+          });
+          status.textContent = t("llm-review-saved");
         } catch (error) {
           status.textContent = error.message;
         } finally {
@@ -2390,12 +2639,29 @@ async function responseSkillsForm() {
         }
       },
     },
-    el("h2", {}, t("mcp-response-skills")),
-    ...skills.map((id) => {
-      const checkbox = el("input", { type: "checkbox", name: "skill", value: id });
-      checkbox.checked = enabled.includes(id);
-      return el("label", { className: "setting-toggle" }, responseSkillLabels[id], checkbox);
-    }),
+    el("p", { className: "muted" }, t("llm-review-description")),
+    el("label", { className: "setting-toggle" }, t("llm-review-enable"), enabled),
+    modelField,
+    el(
+      "datalist",
+      { id: "llm-review-models" },
+      ...["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6-luna"].map((id) =>
+        el("option", { value: id }),
+      ),
+    ),
+    el("label", {}, t("openai-reasoning-effort"), reasoning),
+    reference,
+    referenceLibrary,
+    el("p", { className: "muted" }, t("llm-review-reference-help")),
+    ...rules.map(({ title, mode, fieldset }) =>
+      el(
+        "fieldset",
+        { className: "panel form" },
+        el("legend", {}, title),
+        el("label", {}, t("llm-review-mode"), mode),
+        fieldset,
+      ),
+    ),
     el("div", { className: "actions" }, save, status),
   );
 }
@@ -2412,6 +2678,7 @@ async function settingsPage(page) {
       ["settings/openai", t("openai-settings")],
       ["settings/code-policy", t("code-policy")],
       ["settings/mcp", t("mcp-settings")],
+      ["settings/llm-review", t("llm-review-settings")],
     ].map(([path, label]) =>
       el(
         "a",
@@ -2431,14 +2698,15 @@ async function settingsPage(page) {
     const [heading, form] = await codePolicyPage();
     return [heading, nav, form];
   }
+  if (page === "settings/llm-review") {
+    return [title(t("llm-review-settings")), nav, await llmReviewForm()];
+  }
   if (page === "settings/mcp") {
     return [
       title(t("mcp-settings"), t("mcp-settings-help")),
       nav,
       await mcpSettingsForm(),
-      await assistantMcpForm(),
-      await assistantMcpForm(true),
-      await responseSkillsForm(),
+      await assistantAddOns(),
     ];
   }
   return [title(t("settings")), nav];
@@ -2569,6 +2837,24 @@ try {
     }
   });
   assistantClose.addEventListener("click", closeAssistant);
+  assistantResize.addEventListener("pointerdown", (event) => {
+    if (event.button === 0) {
+      assistantResize.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    }
+  });
+  assistantResize.addEventListener("pointermove", (event) => {
+    if (assistantResize.hasPointerCapture(event.pointerId)) {
+      resizeAssistant(assistantPanel.parentElement.getBoundingClientRect().right - event.clientX);
+    }
+  });
+  assistantResize.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      const change = event.key === "ArrowLeft" ? 24 : -24;
+      resizeAssistant(assistantPanel.getBoundingClientRect().width + change);
+      event.preventDefault();
+    }
+  });
   assistantPanel.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !event.defaultPrevented) {
       event.preventDefault();

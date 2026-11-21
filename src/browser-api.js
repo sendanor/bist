@@ -17,7 +17,10 @@ export async function api(path, data) {
   );
   const result = await response.json();
   if (!response.ok) {
-    throw Object.assign(new Error(result.error), { code: result.code });
+    throw Object.assign(new Error(result.error), {
+      code: result.code,
+      reviewReceipt: result.reviewReceipt,
+    });
   }
   return result;
 }

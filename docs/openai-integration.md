@@ -20,6 +20,13 @@ recipe data as needed. It sets `store: false` on Responses requests. OpenAI's AP
 controls explain which retention policies still apply.
 [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data)
 
+Maintainers can set the conversation model and reasoning effort in **Settings → OpenAI**.
+**Settings → LLM review** can use its own model and effort, and can use the Assistant model
+when no review model is specified. Bist's profiles for GPT-6.2 Sol, GPT-6.2 Astra, GPT-6.1 Terra,
+and GPT-6 Luna default to medium effort. Astra and Sol 6.2 accept low through max. Terra 6.1
+and Luna 6 also accept none. Models outside Bist's profiles use the provider's default.
+[OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)
+
 ## Candidate features
 
 | Priority        | API                                                                                              | Use in Bist                                                                                                                                        | What to measure                                                                                                      |
