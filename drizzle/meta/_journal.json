@@ -64,6 +64,13 @@
       "when": 1795219200008,
       "tag": "0008_revision_listing_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1795219200009,
+      "tag": "0009_openai_settings",
+      "breakpoints": true
     }
   ]
 }

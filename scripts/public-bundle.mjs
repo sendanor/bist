@@ -2,6 +2,7 @@ import { secretKinds } from "./secret-patterns.mjs";
 
 const privateMarkers = [
   /\bMAINTAINER_EMAILS\b/u,
+  /\bSETTINGS_ENCRYPTION_KEY\b/u,
   /\b(?:DATABASE_URL|PRIVATE_KEY|[A-Z][A-Z0-9_]*_(?:SECRET|TOKEN|API_KEY))\b/u,
   /\boai-authenticated-user-(?:email|id)\b/u,
   /sourceMappingURL\s*=/u,

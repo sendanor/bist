@@ -46,7 +46,7 @@ function layer(file) {
   if (path === "store.ts") {
     return "storage";
   }
-  if (path === "openai.ts") {
+  if (["openai.ts", "settings-crypto.ts"].includes(path)) {
     return "provider";
   }
   if (path === "index.ts") {
