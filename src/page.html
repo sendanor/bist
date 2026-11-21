@@ -262,33 +262,37 @@
             </a>
           </div>
         </header>
-        <div
-          id="notice"
-          role="status"
-        ></div>
-        <div
-          class="content"
-          id="view"
-          aria-live="polite"
-        >
-          <p class="muted">{{t:loading-cookbook}}</p>
-        </div>
-        <aside
-          id="assistant-panel"
-          aria-labelledby="assistant-panel-title"
-          hidden
-        >
-          <div class="assistant-panel-header">
-            <h2 id="assistant-panel-title">{{t:assistant}}</h2>
-            <button
-              type="button"
-              id="assistant-close"
+        <div class="workspace">
+          <div class="workspace-content">
+            <div
+              id="notice"
+              role="status"
+            ></div>
+            <div
+              class="content"
+              id="view"
+              aria-live="polite"
             >
-              {{t:assistant-close}}
-            </button>
+              <p class="muted">{{t:loading-cookbook}}</p>
+            </div>
           </div>
-          <div id="assistant-view"></div>
-        </aside>
+          <aside
+            id="assistant-panel"
+            aria-labelledby="assistant-panel-title"
+            hidden
+          >
+            <div class="assistant-panel-header">
+              <h2 id="assistant-panel-title">{{t:assistant}}</h2>
+              <button
+                type="button"
+                id="assistant-close"
+              >
+                {{t:assistant-close}}
+              </button>
+            </div>
+            <div id="assistant-view"></div>
+          </aside>
+        </div>
       </main>
     </div>
   </body>
