@@ -52,6 +52,10 @@ const tools = [
       base: string,
       replace: string,
       editVersion: { type: "integer", minimum: 0 },
+      allowDuplicates: {
+        type: "boolean",
+        description: "Acknowledge duplicate warnings. Cannot override an error.",
+      },
       files: {
         type: "object",
         properties: files,
@@ -154,7 +158,20 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
     }
     return result({ content: [{ type: "text", text: JSON.stringify(value) }] });
   } catch (error) {
-    return result({ isError: true, content: [{ type: "text", text: message(error) }] });
+    const detail = message(error);
+    if (error instanceof RequestError && error.code === "duplicate_warning") {
+      return result({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: detail + " If appropriate, retry with allowDuplicates set to true.",
+          },
+        ],
+        structuredContent: { code: error.code, error: detail },
+      });
+    }
+    return result({ isError: true, content: [{ type: "text", text: detail }] });
   }
 }
 
@@ -227,7 +244,7 @@ export default {
       return json({ error: "Route not found." }, 404);
     } catch (error) {
       return json(
-        { error: message(error) },
+        { error: message(error), code: error instanceof RequestError ? error.code : undefined },
         error instanceof RequestError || error instanceof JsonBodyError ? error.status : 500,
       );
     }

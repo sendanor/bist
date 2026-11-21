@@ -13,7 +13,9 @@ test("fingerprint ignores insignificant TypeScript and CSS formatting", async ()
     source: "\nexport const data={\n\tcount: 1,\n}\n",
     documentation: "Documentation can change independently.",
   });
-  assert.deepEqual(original, formatted);
+  assert.equal(original.snapshot, formatted.snapshot);
+  assert.deepEqual(original.units, formatted.units);
+  assert.notEqual(original.documentation, formatted.documentation);
   assert.deepEqual(Object.keys(original.units), ["source", "styles"]);
 });
 
@@ -36,4 +38,15 @@ test("fingerprint keeps meaningful spaces, statement boundaries and changed test
   const changed = await fingerprintRecipe({ source, tests: "assert.equal(value, 2);" });
   assert.equal(original.units.source, changed.units.source);
   assert.notEqual(original.snapshot, changed.snapshot);
+});
+
+test("prose normalizes line endings but keeps Markdown indentation", async () => {
+  const source = { documentation: "# Guide\r\n\r\n    literal" };
+  const formatted = await fingerprintRecipe({ documentation: "# Guide\n\n    literal\n" });
+  assert.equal((await fingerprintRecipe(source)).documentation, formatted.documentation);
+  assert.notEqual(
+    (await fingerprintRecipe({ documentation: "# Guide\n\nliteral" })).documentation,
+    formatted.documentation,
+  );
+  assert.equal(formatted.snapshot, null);
 });

@@ -209,6 +209,53 @@ if (actual !== "[[1,2],[3]]") {
     instructions: "Save the implementation as source.ts and adapt the test import to your project.",
   },
 };
+/**
+ * Ask whether to save a submission that matched an existing recipe's content.
+ * @param message Duplicate findings returned by the server.
+ */
+function confirmDuplicate(message) {
+  return new Promise((resolve) => {
+    const cancel = btn(t("cancel"), () => dialog.close());
+    const proceed = btn(t("submit-anyway"), () => dialog.close("continue"), "primary");
+    const dialog = el(
+      "dialog",
+      { className: "revision-dialog", "aria-labelledby": "duplicate-heading" },
+      el("h2", { id: "duplicate-heading" }, t("duplicate-content")),
+      el("p", { className: "duplicate-message" }, message),
+      el("div", { className: "revision-dialog-buttons" }, cancel, proceed),
+    );
+    dialog.addEventListener(
+      "close",
+      () => {
+        dialog.remove();
+        resolve(dialog.returnValue === "continue");
+      },
+      { once: true },
+    );
+    document.body.append(dialog);
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+
+/**
+ * Submit a recipe and retry only if the author accepts any duplicate warning.
+ * @param payload Complete recipe snapshot read from the submission form.
+ */
+async function submitWithDuplicateCheck(payload) {
+  try {
+    return await api("submit", payload);
+  } catch (error) {
+    if (error.code !== "duplicate_warning") {
+      throw error;
+    }
+    if (await confirmDuplicate(error.message)) {
+      return api("submit", { ...payload, allowDuplicates: true });
+    }
+    return null;
+  }
+}
+
 function contribute(recipe, replace = false) {
   const isRevision = Boolean(recipe?.id);
   const form = el(
@@ -222,7 +269,7 @@ function contribute(recipe, replace = false) {
         submit.disabled = true;
         banner();
         try {
-          const result = await api("submit", {
+          const result = await submitWithDuplicateCheck({
             slug: data.slug,
             title: data.title,
             summary: data.summary,
@@ -239,6 +286,11 @@ function contribute(recipe, replace = false) {
                 .map((part) => [part, data[part]]),
             ),
           });
+          if (!result) {
+            submit.disabled = false;
+            submit.focus();
+            return;
+          }
           banner(
             [
               replace ? t("draft-resubmitted-for-review") : t("revision-submitted-for-review"),
@@ -961,7 +1013,8 @@ async function settingsPage() {
     el(
       "section",
       { className: "panel" },
-      el("h2", {}, t("type-and-stylesheet-checks")),
+      el("h2", {}, t("quality-checks")),
+      el("p", { className: "muted" }, t("duplicate-setting-help")),
       el(
         "div",
         { className: "policy-fields" },

@@ -117,6 +117,12 @@ export const qualityOptions = [
   { key: "typeCheck", label: "TypeScript types across recipe code parts", default: "warn" },
   { key: "cssClasses", label: "Lowercase, hyphenated CSS class names", default: "error" },
   { key: "cssValidation", label: "CSS property and value validation", default: "error" },
+  { key: "duplicateCode", label: "Duplicate code", default: "error" },
+  {
+    key: "duplicateProse",
+    label: "Duplicate documentation or agent instructions",
+    default: "warn",
+  },
 ] as const;
 type QualityKey = (typeof qualityOptions)[number]["key"];
 type PartName = "source" | "interface" | "tests";

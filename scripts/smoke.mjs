@@ -59,6 +59,7 @@ try {
     "0002_revision_edit_version",
     "0003_recipe_fingerprints",
     "0004_prose_recipes",
+    "0005_prose_fingerprints",
   ]) {
     const migration = await readFile("drizzle/" + name + ".sql", "utf8");
     await db.batch(
@@ -152,6 +153,59 @@ try {
     ).status,
     200,
   );
+
+  const units = {
+    source: "export const duplicatePolicyExample = 912;",
+    instructions: "A unique instruction for duplicate policy QA.",
+  };
+  const submitPolicyExample = (slug, options = {}) =>
+    dispatch("/api/submit", "author", { ...payload, slug, files: units, ...options });
+  assert.equal((await submitPolicyExample("policy-duplicate-original")).status, 201);
+  const setDuplicates = (duplicateCode, duplicateProse) =>
+    dispatch("/api/settings", "maintainer", {
+      ...settings.policy,
+      quality: { ...settings.policy.quality, duplicateCode, duplicateProse },
+    });
+  assert.equal((await setDuplicates("warn", "warn")).status, 200);
+  const warnedDuplicate = await submitPolicyExample("policy-duplicate-warning");
+  assert.equal(warnedDuplicate.status, 409);
+  const warning = await warnedDuplicate.json();
+  assert.equal(warning.code, "duplicate_warning");
+  assert.match(warning.error, /same code/);
+  assert.match(warning.error, /same agent instructions/);
+  assert.equal(
+    await db.prepare("SELECT slug FROM recipes WHERE slug = 'policy-duplicate-warning'").first(),
+    null,
+  );
+  assert.equal(
+    (await submitPolicyExample("policy-duplicate-warning", { allowDuplicates: true })).status,
+    201,
+  );
+  assert.equal((await setDuplicates("off", "error")).status, 200);
+  const blockedProse = await submitPolicyExample("policy-duplicate-prose-error", {
+    allowDuplicates: true,
+  });
+  assert.equal(blockedProse.status, 409);
+  const blocking = await blockedProse.json();
+  assert.equal(blocking.code, undefined);
+  assert.match(blocking.error, /same agent instructions/);
+  assert.doesNotMatch(blocking.error, /same code/);
+  assert.equal((await setDuplicates("warn", "off")).status, 200);
+  const warnedMcp = await dispatch("/mcp", "author", {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "submit_recipe",
+      arguments: { ...payload, slug: "policy-mcp-duplicate", files: units },
+    },
+  });
+  const warnedMcpResult = (await warnedMcp.json()).result;
+  assert.equal(warnedMcpResult.structuredContent.code, "duplicate_warning");
+  assert.match(warnedMcpResult.content[0].text, /allowDuplicates/);
+  assert.equal((await setDuplicates("off", "off")).status, 200);
+  assert.equal((await submitPolicyExample("policy-duplicate-off")).status, 201);
+  assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
 
   const legacySlug = "legacy-fingerprint";
   const legacyId = crypto.randomUUID();
@@ -572,6 +626,7 @@ export function Panel(label: string) {
       ...payload,
       base: submitted.id,
       summary: "A proposed revision.",
+      allowDuplicates: true,
       files: { ...payload.files, styles: ".recipe-preview { color: red; }" },
     },
     "reader",

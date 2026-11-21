@@ -10,9 +10,10 @@ The Sites manifest declares `DB` and MCP. For a private deployment, copy `.opena
 
 A new recipe uses a lowercase, hyphenated slug. To update your own draft before approval, use **Edit draft** or pass its ID as `replace` and its current `editVersion` to MCP. Include the complete file snapshot. You can also remove your own unapproved revision from its review actions, including after a reviewer requests changes. To improve a reviewed and approved revision, use its ID as `base` to create a new revision. Publishing replaces the default revision shown in search. Quarantine immediately hides a revision from contributors and clears the published pointer if it was current. Protected removal requires a recorded reason and a subsequent maintainer action.
 
-Code parts have individual SHA-256 fingerprints and a combined fingerprint. A new submission
-cannot repeat the complete code of your own active revisions or a published recipe, even with
-different formatting or documentation. The comparison includes TypeScript source, interfaces,
-tests, and CSS. Changing any code part can create a new revision. Editing the same draft can
-also update just its documentation or metadata. Older revisions are indexed in batches on
-submission. If the service reports that indexing is still in progress, retry the submission.
+Each code part and each documentation or agent instruction part has a SHA-256 fingerprint.
+Code duplication compares the full code snapshot. Documentation and instructions are checked
+individually. Maintainers can set duplicate checks to Off, Warn, or Error in Settings. Warn
+asks the author before saving. MCP callers can acknowledge it with `allowDuplicates: true`.
+Error blocks the submission. The defaults block duplicate code and warn about duplicate prose.
+Checks look at the author's active revisions and published recipes. Older revisions are indexed
+in batches on submission. Retry if indexing is still in progress.

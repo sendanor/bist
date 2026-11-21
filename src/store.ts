@@ -7,7 +7,7 @@ import {
   validateCodePolicy,
 } from "./code-policy";
 import { normalizeFiles, parts } from "./format";
-import { fingerprintRecipe } from "./quality/recipe-hash";
+import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
 export interface Statement {
   bind(...values: unknown[]): Statement;
   first<T>(): Promise<T | null>;
@@ -46,11 +46,73 @@ interface LegacySnapshot {
   readonly edit_version: number;
 }
 
-const matchingSnapshot = `
-  SELECT 1 FROM revisions
-  WHERE code_hash = ? AND state NOT IN ('removed', 'quarantined')
+const visibleDuplicate = `
+  FROM revisions
+  WHERE state NOT IN ('removed', 'quarantined')
     AND (author = ? OR state = 'published') AND id != COALESCE(?, '')
 `;
+
+const matchingSnapshot = `
+  SELECT 1 ${visibleDuplicate}
+    AND (code_hash = ? OR documentation_hash = ? OR instructions_hash = ?)
+`;
+
+class DuplicateCheck {
+  constructor(
+    readonly code: string | null,
+    readonly documentation: string | null,
+    readonly instructions: string | null,
+    readonly policy: typeof defaultCodePolicy.quality,
+  ) {}
+
+  bindings() {
+    return [this.code, this.documentation, this.instructions];
+  }
+
+  async report(db: Statement) {
+    const matches = await db.first<{ code: number; documentation: number; instructions: number }>();
+    const summary: string[] = [];
+    let blocking = false;
+    if (matches?.code) {
+      summary.push(
+        "The same code is already saved in one of your revisions or a published recipe.",
+      );
+      blocking = this.policy.duplicateCode === "error";
+    }
+    if (matches?.documentation) {
+      summary.push(
+        "The same documentation is already saved in one of your revisions or a published recipe.",
+      );
+    }
+    if (matches?.instructions) {
+      summary.push(
+        "The same agent instructions are already saved in one of your revisions or a published recipe.",
+      );
+    }
+    if (matches?.documentation || matches?.instructions) {
+      blocking ||= this.policy.duplicateProse === "error";
+    }
+    if (summary.length) {
+      throw new RequestError(summary.join("\n"), 409, blocking ? undefined : "duplicate_warning");
+    }
+  }
+}
+
+function duplicateCheck(
+  fingerprint: RecipeFingerprint,
+  policy: typeof defaultCodePolicy.quality,
+  allow: boolean,
+) {
+  const check = (severity: string) => severity === "error" || (severity === "warn" && !allow);
+  const code = check(policy.duplicateCode) ? fingerprint.snapshot : null;
+  const prose = check(policy.duplicateProse);
+  return new DuplicateCheck(
+    code,
+    prose ? fingerprint.documentation : null,
+    prose ? fingerprint.instructions : null,
+    policy,
+  );
+}
 
 const fields = "v.id, v.slug, v.title, v.summary, v.tags, v.state, v.created, v.published_at";
 /**
@@ -113,6 +175,7 @@ export class RequestError extends Error {
   constructor(
     message: string,
     public status = 400,
+    public code?: "duplicate_warning",
   ) {
     super(message);
   }
@@ -308,18 +371,21 @@ export class Cookbook {
   private async indexLegacySnapshots() {
     const limit = 24;
     const { results } = await this.sql(
-      "SELECT id, files, edit_version FROM revisions WHERE unit_hashes IS NULL AND files IS NOT NULL ORDER BY id LIMIT ?",
+      "SELECT id, files, edit_version FROM revisions WHERE fingerprints_ready = 0 AND files IS NOT NULL ORDER BY id LIMIT ?",
       limit + 1,
     ).all<LegacySnapshot>();
     const statements = [];
     for (const row of results.slice(0, limit)) {
       const files = decodeFiles(row.files, parts);
-      const { snapshot, units } = await fingerprintRecipe(files);
+      const { snapshot, units, documentation, instructions } = await fingerprintRecipe(files);
       statements.push(
         this.sql(
-          "UPDATE revisions SET code_hash = ?, unit_hashes = ? WHERE id = ? AND edit_version = ? AND unit_hashes IS NULL AND files IS NOT NULL",
+          `UPDATE revisions SET code_hash = ?, unit_hashes = ?, documentation_hash = ?, instructions_hash = ?,
+             fingerprints_ready = 1 WHERE id = ? AND edit_version = ? AND fingerprints_ready = 0 AND files IS NOT NULL`,
           snapshot,
           JSON.stringify(units),
+          documentation,
+          instructions,
           row.id,
           row.edit_version,
         ),
@@ -336,22 +402,26 @@ export class Cookbook {
     }
   }
 
-  private async assertNoDuplicate(hash: string | null, except: string | null) {
-    if (hash === null) {
+  private async explainDuplicate(check: DuplicateCheck, except: string | null) {
+    if (check.bindings().every((hash) => hash === null)) {
       return;
     }
-    const existing = await this.sql(
-      matchingSnapshot + " LIMIT 1",
-      hash,
-      this.user.id,
-      except,
-    ).first();
-    if (existing) {
-      throw new RequestError(
-        "The same code is already saved in one of your revisions or a published recipe.",
-        409,
-      );
-    }
+    await check.report(
+      this.sql(
+        `SELECT EXISTS(SELECT 1 ${visibleDuplicate} AND code_hash = ?) AS code,
+              EXISTS(SELECT 1 ${visibleDuplicate} AND documentation_hash = ?) AS documentation,
+              EXISTS(SELECT 1 ${visibleDuplicate} AND instructions_hash = ?) AS instructions`,
+        this.user.id,
+        except,
+        check.code,
+        this.user.id,
+        except,
+        check.documentation,
+        this.user.id,
+        except,
+        check.instructions,
+      ),
+    );
   }
 
   async submit(input: Input) {
@@ -367,6 +437,9 @@ export class Cookbook {
       throw new RequestError("Choose either a base revision or a revision to replace.");
     }
     const editVersion = replace ? snapshotVersion(input.editVersion) : 0;
+    if (input.allowDuplicates !== undefined && typeof input.allowDuplicates !== "boolean") {
+      throw new RequestError("allowDuplicates must be a boolean.");
+    }
     const tags = input.tags ?? [];
     if (!isArray(tags) || tags.length > 8) {
       throw new RequestError("Use up to eight tags.");
@@ -375,20 +448,28 @@ export class Cookbook {
     const policy = await this.readCodePolicy();
     const { files, warnings } = await this.normalizeSubmission(input.files, policy);
     await this.indexLegacySnapshots();
-    const { snapshot, units } = await fingerprintRecipe(files);
+    const fingerprint = await fingerprintRecipe(files);
+    const duplicate = duplicateCheck(fingerprint, policy.quality, input.allowDuplicates === true);
+    const hashes = [
+      fingerprint.snapshot,
+      JSON.stringify(fingerprint.units),
+      fingerprint.documentation,
+      fingerprint.instructions,
+    ];
+    const match = [this.user.id, replace, ...duplicate.bindings()];
     const payload = {
       title,
       summary,
       tags: JSON.stringify(normalizedTags),
       files: JSON.stringify(files),
-      units: JSON.stringify(units),
     };
     const notices = warnings.length ? { warnings } : {};
     if (replace) {
       const updated = await this.sql(
         `UPDATE revisions
          SET title = ?, summary = ?, tags = ?, files = ?, edit_version = edit_version + 1,
-             state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?
+             state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?,
+             documentation_hash = ?, instructions_hash = ?, fingerprints_ready = 1
          WHERE id = ? AND slug = ? AND author = ? AND edit_version = ?
            AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL
            AND NOT EXISTS (${matchingSnapshot})`,
@@ -396,18 +477,15 @@ export class Cookbook {
         payload.summary,
         payload.tags,
         payload.files,
-        snapshot,
-        payload.units,
+        ...hashes,
         replace,
         slug,
         this.user.id,
         editVersion,
-        snapshot,
-        this.user.id,
-        replace,
+        ...match,
       ).run();
       if (!updated.meta.changes) {
-        await this.assertNoDuplicate(snapshot, replace);
+        await this.explainDuplicate(duplicate, replace);
         throw new RequestError(
           "This draft cannot be replaced. Reload it to check its current status.",
           409,
@@ -422,13 +500,12 @@ export class Cookbook {
         slug,
         this.user.id,
         base,
-        snapshot,
-        this.user.id,
-        null,
+        ...match,
       ),
       this.sql(
-        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,code_hash,unit_hashes)
-        SELECT ?,r.slug,?,?,?,?,?,?,?,? FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
+        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,code_hash,unit_hashes,
+          documentation_hash,instructions_hash,fingerprints_ready)
+        SELECT ?,r.slug,?,?,?,?,?,?,?,?,?,?,1 FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
           (? IS NULL AND r.live IS NULL AND (r.owner = ? OR ?) AND NOT EXISTS
             (SELECT 1 FROM revisions WHERE slug = r.slug AND state != 'removed'))
           OR EXISTS (SELECT 1 FROM revisions p WHERE p.id = ? AND p.slug = r.slug AND
@@ -440,12 +517,9 @@ export class Cookbook {
         payload.summary,
         payload.tags,
         payload.files,
-        snapshot,
-        payload.units,
+        ...hashes,
         slug,
-        snapshot,
-        this.user.id,
-        null,
+        ...match,
         base,
         this.user.id,
         this.user.maintainer,
@@ -455,7 +529,7 @@ export class Cookbook {
       ),
     ]);
     if (!result[1].meta.changes) {
-      await this.assertNoDuplicate(snapshot, null);
+      await this.explainDuplicate(duplicate, null);
       throw new RequestError("Choose an accessible base revision for this recipe.", 409);
     }
     return { slug, id, state: "pending", editVersion, ...notices };

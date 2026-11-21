@@ -17,7 +17,7 @@ export async function api(path, data) {
   );
   const result = await response.json();
   if (!response.ok) {
-    throw new Error(result.error);
+    throw Object.assign(new Error(result.error), { code: result.code });
   }
   return result;
 }

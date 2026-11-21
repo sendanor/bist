@@ -7,6 +7,8 @@ const codeParts = ["source", "interface", "tests", "styles"] as const;
 export interface RecipeFingerprint {
   readonly snapshot: string | null;
   readonly units: Partial<Record<(typeof codeParts)[number], string>>;
+  readonly documentation: string | null;
+  readonly instructions: string | null;
 }
 
 function canonicalTypeScript(text: string) {
@@ -75,7 +77,9 @@ async function digest(value: string) {
  * @param files Validated TypeScript and CSS recipe parts, plus any accompanying prose.
  * @throws {Error} When a stylesheet cannot be parsed.
  */
-export async function fingerprintRecipe(files: Readonly<Partial<Record<string, string>>>) {
+export async function fingerprintRecipe(
+  files: Readonly<Partial<Record<string, string>>>,
+): Promise<RecipeFingerprint> {
   const units: RecipeFingerprint["units"] = {};
   for (const part of codeParts) {
     const text = files[part];
@@ -87,5 +91,15 @@ export async function fingerprintRecipe(files: Readonly<Partial<Record<string, s
   const snapshot = Object.keys(units).length
     ? await digest(JSON.stringify(["bist-snapshot-v1", units]))
     : null;
-  return { snapshot, units };
+  async function prose(text: string | undefined) {
+    return text?.trim()
+      ? digest(JSON.stringify(["bist-prose-v1", text.replace(/\r\n?/g, "\n").trimEnd()]))
+      : null;
+  }
+  return {
+    snapshot,
+    units,
+    documentation: await prose(files.documentation),
+    instructions: await prose(files.instructions),
+  };
 }

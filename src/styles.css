@@ -312,6 +312,10 @@ small {
   color: #922b43;
 }
 
+.duplicate-message {
+  white-space: pre-line;
+}
+
 .content {
   width: min(1160px, 100%);
   margin: auto;
