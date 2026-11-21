@@ -1,33 +1,12 @@
 import { isRecord } from "./guards.ts";
 import { parts, type Part } from "./format";
+import {
+  defaultReviewPolicy,
+  type LlmReviewPolicy,
+  type LlmReviewRule,
+} from "./quality/review-defaults.ts";
 import { RequestError, str, type Database, type Input } from "./store";
-
-type Mode = "off" | "warn" | "error";
-
-/** The rule sent to the review model for an individual recipe part. */
-interface Rule {
-  readonly mode: Mode;
-  readonly instruction: string;
-}
-
-/** Saved maintenance policy for reviewing newly submitted file content. */
-export interface LlmReviewPolicy {
-  readonly enabled: boolean;
-  readonly model: string;
-  readonly reasoningEffort: string;
-  readonly referenceQuery: string;
-  readonly referenceLibraryId: string;
-  readonly rules: Readonly<Partial<Record<Part, Rule>>>;
-}
-
-const defaults: LlmReviewPolicy = {
-  enabled: false,
-  model: "",
-  reasoningEffort: "",
-  referenceQuery: "",
-  referenceLibraryId: "",
-  rules: {},
-};
+export type { LlmReviewPolicy } from "./quality/review-defaults.ts";
 
 /**
  * Validate and order the maintainer's complete policy before saving or using it.
@@ -38,7 +17,7 @@ export function llmReviewPolicy(input: Input): LlmReviewPolicy {
   if (typeof input.enabled !== "boolean" || !isRecord(input.rules)) {
     throw new RequestError("Provide a review mode and rules for the recipe files.");
   }
-  const rules: Partial<Record<Part, Rule>> = {};
+  const rules: Partial<Record<Part, LlmReviewRule>> = {};
   const referenceQuery = str(input.referenceQuery, "public MCP reference query", 160, true);
   const referenceLibraryId = str(
     input.referenceLibraryId,
@@ -81,7 +60,7 @@ export function llmReviewPolicy(input: Input): LlmReviewPolicy {
 }
 
 /**
- * Read the current LLM policy, using disabled defaults for existing installations.
+ * Read the saved policy or offer the standard rules before review is activated.
  * @param db The instance database binding.
  */
 export async function readLlmReviewPolicy(db: Database) {
@@ -89,7 +68,7 @@ export async function readLlmReviewPolicy(db: Database) {
     .prepare("SELECT policy FROM llm_review_settings WHERE id = 1")
     .first<{ policy: string }>();
   if (!row) {
-    return defaults;
+    return { ...defaultReviewPolicy, enabled: false };
   }
   const parsed: unknown = JSON.parse(row.policy);
   if (!isRecord(parsed)) {

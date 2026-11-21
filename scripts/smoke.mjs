@@ -1,4 +1,6 @@
 import { repositoryRecipe } from "./repository-recipes.mjs";
+import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
+import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -152,6 +154,24 @@ try {
   );
   await db.prepare(await readFile("drizzle/0016_review_comment_author.sql", "utf8")).run();
   const llmReviewPath = "/api/settings/llm-review";
+  const initialReview = await (await dispatch(llmReviewPath, "maintainer")).json();
+  assert.equal(initialReview.enabled, false);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(initialReview.rules).map(([part, rule]) => [part, rule.mode]),
+    ),
+    {
+      source: "error",
+      interface: "error",
+      instructions: "error",
+      documentation: "warn",
+      tests: "warn",
+      styles: "warn",
+    },
+  );
+  for (const rule of Object.values(initialReview.rules)) {
+    assert.ok(rule.instruction.trim().length > 0 && rule.instruction.length <= 2000);
+  }
   const llmRule = {
     enabled: true,
     model: "gpt-6.2-sol",
@@ -1475,8 +1495,15 @@ describe("hasFields", () => {
         llmReviewCalls++;
         assert.equal(body.model, "gpt-6.2-sol");
         assert.equal(body.store, false);
-        assert.deepEqual(body.reasoning, { effort: "low" });
-        assert.match(body.instructions, /Require an exact next step/u);
+        if (body.reasoning?.effort === "medium") {
+          assert.ok(
+            body.instructions.includes(defaultReviewPolicy.rules.documentation.instruction),
+          );
+          assert.equal(body.tools, undefined);
+        } else {
+          assert.deepEqual(body.reasoning, { effort: "low" });
+          assert.match(body.instructions, /Require an exact next step/u);
+        }
         assert.deepEqual(
           JSON.parse(body.input[0].content).map(({ part }) => part),
           ["documentation"],
@@ -1678,6 +1705,9 @@ describe("hasFields", () => {
   assert.ok(!JSON.stringify(row).includes(key));
   const metadataOnly = await dispatch("/api/settings/openai", "maintainer", { model });
   assert.equal(metadataOnly.status, 200);
+  const retainedPolicy = await (await dispatch(llmReviewPath, "maintainer")).json();
+  assert.deepEqual(retainedPolicy.rules, llmRule.rules);
+  assert.equal(retainedPolicy.enabled, false);
   assert.deepEqual(
     await secretsDb.prepare("SELECT credential FROM openai_settings WHERE id = 1").first(),
     row,
@@ -1887,6 +1917,7 @@ describe("hasFields", () => {
     configured: false,
   });
   assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
+  await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
   console.log(
     JSON.stringify({
       passed:

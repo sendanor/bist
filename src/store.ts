@@ -9,6 +9,7 @@ import {
 import { normalizeFiles, parts, recipeFileNames, type Part, type RecipeFileNames } from "./format";
 import { sourceLines } from "./line-diff";
 import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
+import { defaultReviewPolicy } from "./quality/review-defaults.ts";
 export interface Statement {
   /**
    * Bind positional values to SQL parameters without string interpolation.
@@ -442,14 +443,26 @@ export class Cookbook {
   }
 
   /**
-   * Save the model and optional replacement ciphertext in a permission-checked write.
+   * Save the connection and activate the initial review policy on first completing setup.
+   * The transaction preserves any policy already saved by a maintainer.
    * @param model Model ID approved by the current maintainer, or null to preserve the saved model.
    * @param credential Replacement encrypted envelope, or null to preserve the existing value.
    * @param effort Explicit reasoning effort, or null to retain it unless the model changes.
    */
   async saveOpenAiSettings(model: string | null, credential: string | null, effort: string | null) {
     this.maintainer();
-    await this.sql(
+    const initializeReview = this.sql(
+      `INSERT INTO llm_review_settings (id, policy)
+       SELECT 1, ? FROM (SELECT 1) LEFT JOIN openai_settings AS prior ON prior.id = 1
+       WHERE (prior.credential IS NULL OR prior.model = '')
+         AND (prior.credential IS NOT NULL OR ? = 1)
+         AND COALESCE(?, prior.model, '') <> ''
+       ON CONFLICT(id) DO NOTHING`,
+      JSON.stringify(defaultReviewPolicy),
+      credential !== null ? 1 : 0,
+      model,
+    );
+    const saveConnection = this.sql(
       `INSERT INTO openai_settings (id, model, credential, reasoning_effort)
        SELECT 1, COALESCE(?, ''), ?, COALESCE(?, '') WHERE ? = 1
        ON CONFLICT(id) DO UPDATE SET model = COALESCE(?, openai_settings.model),
@@ -463,7 +476,8 @@ export class Cookbook {
       model,
       effort,
       model,
-    ).run();
+    );
+    await this.db.batch([initializeReview, saveConnection]);
   }
 
   /** Remove the OpenAI credential while leaving the configured model in place. */
