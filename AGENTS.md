@@ -20,3 +20,6 @@ built for release as public.
   for the checks and their scope.
 - Always stage and commit your changes when the task is complete. Keep each
   commit small and focused, and use a message that describes what it changes.
+- After validating and committing application changes, deploy the matching
+  source to the existing [Code Cookbook test site](https://adaptable-code-cookbook.jheusala.chatgpt.site/).
+  Preserve its access settings and confirm the new version is live.
