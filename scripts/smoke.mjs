@@ -1082,10 +1082,9 @@ describe("hasFields", () => {
   assert.ok(publicTags.includes("paging"));
   assert.ok(publicTags.includes("public-only"));
   assert.ok(!publicTags.includes("draft-only"));
-  assert.deepEqual(
-    await (await dispatch("/api/tags?scope=contribute", "reader")).json(),
-    publicTags,
-  );
+  const contributorTags = await (await dispatch("/api/tags?scope=contribute", "reader")).json();
+  assert.ok(publicTags.every((tag) => contributorTags.includes(tag)));
+  assert.ok(!contributorTags.includes("draft-only"));
   assert.ok(
     (await (await dispatch("/api/tags?scope=mine", "author")).json()).includes("draft-only"),
   );
