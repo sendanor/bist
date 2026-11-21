@@ -12,6 +12,10 @@ highlighter.registerLanguage("css", cssLanguage);
 
 const outlet = document.querySelector("#view");
 const notice = document.querySelector("#notice");
+const toolbar = document.querySelector("#revision-toolbar");
+const topBar = toolbar.closest("header");
+const locationLabel = document.querySelector("#location");
+const revisionBack = document.querySelector("#revision-back");
 const labels = {
   library: t("recipe-library"),
   contribute: t("contribute"),
@@ -63,9 +67,10 @@ function icon(name) {
   svg.append(use);
   return svg;
 }
-function banner(message = "", error = false) {
+function banner(message = "", error = false, revisionFeedback = false) {
   notice.textContent = message;
   notice.classList.toggle("error", error);
+  notice.classList.toggle("revision-feedback", revisionFeedback);
 }
 function btn(text, fn, style = "") {
   return el("button", { type: "button", className: style, onclick: fn }, text);
@@ -493,6 +498,17 @@ function highlightedLines(source, language) {
     marker: String(index + 1),
   }));
 }
+/**
+ * Give a file tool a visible label on wide screens and a name at every width.
+ * @param button Tool button to label.
+ * @param symbol Existing icon identifier.
+ * @param label Localized name of the action.
+ */
+function labelFileTool(button, symbol, label) {
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.replaceChildren(icon(symbol), el("span", { className: "file-tool-label" }, label));
+}
 function fileSection(key, value, previous, hasBase) {
   const name = parts[key];
   const prose = key === "documentation" || key === "instructions";
@@ -533,12 +549,12 @@ function fileSection(key, value, previous, hasBase) {
       status.textContent = t("copy-unavailable-select-the-file-text-to-copy");
     }
   });
-  copy.prepend(icon("copy"));
-  wrapButton.prepend(icon("wrap"));
+  labelFileTool(copy, "copy", prose ? t("copy-markdown") : t("copy-code"));
+  labelFileTool(wrapButton, "wrap", t("wrap-lines"));
   function renderPart() {
     status.textContent = "";
     if (compare) {
-      compare.replaceChildren(icon("diff"), comparing ? "Show file" : "Show changes");
+      labelFileTool(compare, "diff", comparing ? t("show-file") : t("show-changes"));
       compare.setAttribute("aria-pressed", String(comparing));
     }
     wrapButton.hidden = !comparing && (prose || value === undefined);
@@ -598,86 +614,224 @@ function fileViewer(recipe, base) {
   return el(
     "section",
     { className: "section file-viewer", "aria-labelledby": "recipe-files-heading" },
-    el("h2", { id: "recipe-files-heading" }, t("recipe-files")),
+    el("h2", { id: "recipe-files-heading", className: "visually-hidden" }, t("recipe-files")),
     navigate,
     ...files.map(({ section }) => section),
   );
 }
-function controls(recipe, section) {
+const actionReasons = {
+  approve: { label: t("optional-review-note"), required: false },
+  request_changes: { label: t("what-should-change"), required: true },
+  quarantine: { label: t("why-quarantine-revision"), required: true },
+  request_removal: { label: t("why-remove-revision"), required: true },
+};
+const actionDescriptions = {
+  publish: t("publish-current-revision-description"),
+  remove_draft: t("remove-draft-description"),
+  approve_removal: t("approve-removal-description"),
+};
+
+/**
+ * List the actions available for the current revision and viewer.
+ * @param recipe Loaded revision with the author's permissions and review status.
+ */
+function revisionChoices(recipe) {
   const choices = [];
-  const addAction = (action, label, style = "") => choices.push({ action, label, style });
+  const addAction = (action, label, destructive = false) =>
+    choices.push({ action, label, destructive });
   if (maintainer && recipe.state === "pending" && !recipe.removal_reason) {
-    addAction("approve", t("approve-revision"), "primary");
+    addAction("approve", t("approve-revision"));
     addAction("request_changes", t("request-changes"));
   }
   if (maintainer && recipe.state === "approved" && !recipe.removal_reason) {
-    addAction("publish", t("publish-approved-revision"), "primary");
+    addAction("publish", t("publish-approved-revision"));
   }
-  if (maintainer && recipe.state !== "quarantined") {
-    addAction("quarantine", t("quarantine"), "danger");
+  if (recipe.state !== "quarantined") {
+    choices.push({
+      label: recipe.canReplace ? t("edit-draft") : t("propose-an-improvement"),
+      href:
+        (recipe.canReplace ? "#edit/" : "#improve/") +
+        encodeURIComponent(recipe.slug) +
+        "/" +
+        encodeURIComponent(recipe.id),
+    });
+    if (maintainer) {
+      addAction("quarantine", t("quarantine"), true);
+    }
   }
   if (recipe.canRemoveDraft) {
-    addAction("remove_draft", t("remove-draft"), "danger");
+    addAction("remove_draft", t("remove-draft"), true);
   } else if (recipe.canRequestRemoval && !recipe.removal_reason) {
-    addAction("request_removal", t("request-removal"), "danger");
+    addAction("request_removal", t("request-removal"), true);
   }
   if (maintainer && recipe.removal_reason) {
-    addAction("approve_removal", t("approve-removal"), "danger");
+    addAction("approve_removal", t("approve-removal"), true);
   }
+  return choices;
+}
+
+/**
+ * Open the selected action's form with only the fields relevant to that action.
+ * @param choice Selected action with its label and destructive styling.
+ * @param submit Callback that saves the action and may reject with an API error.
+ * @param trigger Toolbar button to refocus after cancellation.
+ */
+function showRevisionAction(choice, submit, trigger) {
+  const reason = actionReasons[choice.action];
+  const errorStatus = el("p", { className: "revision-action-error", role: "alert", hidden: "" });
+  const textarea =
+    reason &&
+    el("textarea", {
+      name: "reason",
+      maxlength: 1000,
+      required: reason.required ? "" : undefined,
+      rows: 4,
+    });
+  const cancel = btn(t("cancel"), () => dialog.close());
+  const confirm = el(
+    "button",
+    { type: "submit", className: choice.destructive ? "danger" : "primary" },
+    choice.label,
+  );
+  const form = el(
+    "form",
+    {},
+    el("h2", { id: "revision-action-heading" }, choice.label),
+    actionDescriptions[choice.action] && el("p", {}, actionDescriptions[choice.action]),
+    textarea && el("label", { className: "revision-action-reason" }, reason.label, textarea),
+    errorStatus,
+    el("div", { className: "revision-dialog-buttons" }, cancel, confirm),
+  );
+  const dialog = el(
+    "dialog",
+    { className: "revision-dialog", "aria-labelledby": "revision-action-heading" },
+    form,
+  );
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const note = textarea?.value.trim() ?? "";
+    if (reason?.required && !note) {
+      textarea.value = "";
+      textarea.reportValidity();
+      return;
+    }
+    errorStatus.hidden = true;
+    confirm.disabled = true;
+    cancel.disabled = true;
+    if (textarea) {
+      textarea.readOnly = true;
+    }
+    try {
+      await submit(choice.action, note, dialog);
+    } catch (error) {
+      errorStatus.textContent = error.message;
+      errorStatus.hidden = false;
+      confirm.focus();
+    } finally {
+      confirm.disabled = false;
+      cancel.disabled = false;
+      if (textarea) {
+        textarea.readOnly = false;
+      }
+    }
+  });
+  dialog.addEventListener("cancel", (event) => {
+    if (confirm.disabled) {
+      event.preventDefault();
+    }
+  });
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    if (trigger.isConnected) {
+      trigger.focus({ preventScroll: true });
+    }
+  });
+  trigger.closest(".revision-controls").append(dialog);
+  dialog.showModal();
+  (choice.destructive || !textarea ? cancel : textarea).focus();
+}
+
+/**
+ * Build the toolbar disclosure for a revision.
+ * @param recipe Loaded revision and its current snapshot version.
+ * @param section Section to return to if the revision is removed.
+ */
+function revisionControls(recipe, section) {
+  const choices = revisionChoices(recipe);
   if (!choices.length) {
     return null;
   }
-  const reason = field(
-    "reason",
-    t("reason"),
-    { maxlength: 1000, placeholder: t("required-for-changes-quarantine-and-removal-requests") },
-    "",
-    true,
+  const trigger = el(
+    "button",
+    {
+      type: "button",
+      className: "revision-trigger",
+      "aria-label": t("revision-actions"),
+      title: t("revision-actions"),
+      "aria-controls": "revision-options",
+      "aria-expanded": "false",
+    },
+    icon("more"),
   );
-  const actions = el("div", { className: "actions" });
-  for (const { action, label, style } of choices) {
-    actions.append(
-      btn(
-        label,
-        async () => {
-          const buttons = [...actions.querySelectorAll("button")];
-          buttons.forEach((button) => {
-            button.disabled = true;
-          });
-          banner();
-          try {
-            await api("action", {
-              slug: recipe.slug,
-              revision: recipe.id,
-              editVersion: recipe.editVersion,
-              action,
-              reason: reason.querySelector("textarea").value,
-            });
-            banner(action === "publish" ? t("recipe-published") : t("revision-updated"));
-            if (["remove_draft", "approve_removal"].includes(action)) {
-              location.hash = "#" + section;
-            } else {
-              render();
-            }
-          } catch (error) {
-            banner(error.message, true);
-          } finally {
-            buttons.forEach((button) => {
-              button.disabled = false;
-            });
-          }
-        },
-        style,
-      ),
-    );
+  const menu = el("div", { className: "revision-menu", id: "revision-options", hidden: "" });
+  const wrapper = el("div", { className: "revision-controls" }, trigger, menu);
+  function toggle(open) {
+    menu.hidden = !open;
+    trigger.setAttribute("aria-expanded", String(open));
   }
-  return el(
-    "section",
-    { className: "panel section", id: "revision-actions", tabindex: "-1" },
-    el("h2", {}, t("revision-actions")),
-    reason,
-    actions,
-  );
+  const page = location.hash;
+  async function submit(action, reason, dialog) {
+    await api("action", {
+      slug: recipe.slug,
+      revision: recipe.id,
+      editVersion: recipe.editVersion,
+      action,
+      reason,
+    });
+    dialog.close();
+    if (location.hash !== page) {
+      return;
+    }
+    banner(action === "publish" ? t("recipe-published") : t("revision-updated"), false, true);
+    if (["remove_draft", "approve_removal"].includes(action)) {
+      location.hash = "#" + section;
+    } else {
+      await render();
+      toolbar.querySelector("button")?.focus({ preventScroll: true });
+    }
+  }
+  for (const choice of choices) {
+    const item = choice.href
+      ? el("a", { href: choice.href }, choice.label)
+      : btn(
+          choice.label,
+          () => {
+            toggle(false);
+            showRevisionAction(choice, submit, trigger);
+          },
+          choice.destructive ? "is-destructive" : "",
+        );
+    menu.append(item);
+  }
+  trigger.addEventListener("click", () => {
+    toggle(menu.hidden);
+    if (!menu.hidden) {
+      menu.firstElementChild.focus();
+    }
+  });
+  wrapper.addEventListener("focusout", (event) => {
+    if (!wrapper.contains(event.relatedTarget)) {
+      toggle(false);
+    }
+  });
+  wrapper.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      event.preventDefault();
+      toggle(false);
+      trigger.focus();
+    }
+  });
+  return wrapper;
 }
 async function recipePage(section, slug, revision) {
   const recipe = await api("recipe?" + new URLSearchParams({ slug, revision }));
@@ -690,53 +844,33 @@ async function recipePage(section, slug, revision) {
     }
   }
   recentRecipe = recipe;
-  const reviewControls = controls(recipe, section);
-  const jump =
-    maintainer &&
-    reviewControls &&
-    ["pending", "approved"].includes(recipe.state) &&
-    btn(
-      t("review-actions"),
-      () => {
-        reviewControls.focus({ preventScroll: true });
-        reviewControls.scrollIntoView({ block: "start" });
-      },
-      "review-jump",
-    );
-  return [
-    el(
-      "a",
-      { className: "back", href: "#" + section },
-      t("back-to") + (labels[section] ?? t("library")).toLowerCase(),
-    ),
-    title(recipe.title, recipe.summary),
-    chip(stateLabels[recipe.state] ?? recipe.state, "state-" + recipe.state),
-    ...recipe.tags.map((tag) => chip(tag)),
-    el(
-      "dl",
-      { className: "revision-meta" },
-      el("div", {}, el("dt", {}, t("recipe-slug")), el("dd", {}, el("code", {}, recipe.slug))),
-      el("div", {}, el("dt", {}, t("revision-id")), el("dd", {}, el("code", {}, recipe.id))),
-    ),
-    recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
-    recipe.removal_reason &&
-      el("p", { className: "panel" }, t("removal-requested") + recipe.removal_reason),
-    jump,
-    fileViewer(recipe, base),
-    reviewControls,
-    recipe.state !== "quarantined" &&
+  return {
+    actions: revisionControls(recipe, section),
+    toolbarTitle: recipe.title,
+    view: [
       el(
-        "div",
-        { className: "section" },
-        buttonLink(
-          recipe.canReplace ? t("edit-draft") : t("propose-an-improvement"),
-          (recipe.canReplace ? "#edit/" : "#improve/") +
-            encodeURIComponent(recipe.slug) +
-            "/" +
-            encodeURIComponent(recipe.id),
+        "header",
+        { className: "recipe-heading" },
+        title(recipe.title, recipe.summary),
+        el(
+          "div",
+          { className: "recipe-byline" },
+          chip(stateLabels[recipe.state] ?? recipe.state, "state-" + recipe.state),
+          recipe.tags.length > 0 && el("span", { className: "muted" }, recipe.tags.join(" · ")),
         ),
       ),
-  ];
+      recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
+      recipe.removal_reason &&
+        el("p", { className: "panel" }, t("removal-requested") + recipe.removal_reason),
+      fileViewer(recipe, base),
+      el(
+        "dl",
+        { className: "revision-meta" },
+        el("div", {}, el("dt", {}, t("recipe-slug")), el("dd", {}, el("code", {}, recipe.slug))),
+        el("div", {}, el("dt", {}, t("revision-id")), el("dd", {}, el("code", {}, recipe.id))),
+      ),
+    ],
+  };
 }
 async function settingsPage() {
   const { policy, prettierOptions, eslintRules, qualityOptions } = await api("settings");
@@ -890,6 +1024,7 @@ async function settingsPage() {
 }
 async function render() {
   const current = ++renderId;
+  toolbar.replaceChildren();
   const [page, one, two, three] = location.hash
     .slice(1)
     .split("/")
@@ -902,7 +1037,17 @@ async function render() {
     });
   const section =
     page === "recipe" ? one : ["improve", "edit"].includes(page) ? "contribute" : page || "library";
-  document.querySelector("#location").textContent = labels[section] ?? labels.library;
+  const reading = page === "recipe";
+  topBar.classList.toggle("recipe-top", reading);
+  outlet.classList.toggle("recipe-view", reading);
+  revisionBack.hidden = !reading;
+  if (reading) {
+    revisionBack.href = "#" + (Object.hasOwn(labels, section) ? section : "library");
+    const backLabel = t("back-to") + (labels[section] ?? t("library")).toLowerCase();
+    revisionBack.setAttribute("aria-label", backLabel);
+    revisionBack.title = backLabel;
+  }
+  locationLabel.textContent = labels[section] ?? labels.library;
   for (const link of document.querySelectorAll(".rail nav a")) {
     if (link.hash === "#" + section) {
       link.setAttribute("aria-current", "page");
@@ -912,8 +1057,10 @@ async function render() {
   }
   try {
     let view;
+    let actions;
+    let toolbarTitle;
     if (page === "recipe") {
-      view = await recipePage(one, two, three);
+      ({ view, actions, toolbarTitle } = await recipePage(one, two, three));
     } else if (page === "improve" || page === "edit") {
       const recipe =
         page === "improve" && recentRecipe?.id === two && recentRecipe.slug === one
@@ -950,6 +1097,12 @@ async function render() {
     }
     if (current === renderId) {
       outlet.replaceChildren(...view.filter((item) => item && item.nodeType));
+      if (toolbarTitle) {
+        locationLabel.textContent = toolbarTitle;
+      }
+      if (actions) {
+        toolbar.append(actions);
+      }
     }
   } catch (error) {
     if (current === renderId) {

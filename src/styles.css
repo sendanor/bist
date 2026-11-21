@@ -8,6 +8,7 @@
   --line: #dfe3ee;
   --accent: #4d42bb;
   --sidebar: #171a32;
+  --top-height: 76px;
 
   font:
     16px/1.55 system-ui,
@@ -149,7 +150,10 @@ small {
 }
 
 .top {
-  min-height: 76px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  min-height: var(--top-height);
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   display: flex;
@@ -160,14 +164,189 @@ small {
   font-weight: 650;
 }
 
-.top > span {
+.top-context {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+#revision-back:not([hidden]) {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin-inline-start: -8px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+#revision-back:hover {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+#location {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.94rem;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.recipe-top .top-new-recipe {
+  display: none;
+}
+
+.revision-controls {
+  position: relative;
+}
+
+.revision-trigger {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.revision-trigger:hover,
+.revision-trigger[aria-expanded="true"] {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.revision-trigger .ui-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.revision-menu {
+  position: absolute;
+  inset-block-start: calc(100% + 8px);
+  inset-inline-end: 0;
+  width: min(17rem, calc(100vw - 32px));
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px #17203b22;
+}
+
+.revision-menu :is(button, a) {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.94rem;
+  font-weight: 540;
+  text-align: start;
+  text-decoration: none;
+}
+
+.revision-menu :is(button, a):hover {
+  background: var(--paper);
+}
+
+.revision-menu .is-destructive {
+  color: #922b43;
+}
+
+.revision-dialog {
+  width: min(30rem, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 20px 60px #17203b40;
+}
+
+.revision-dialog::backdrop {
+  background: #171a3266;
+}
+
+.revision-dialog h2 {
+  margin: 0 0 14px;
+  font-size: 1.25rem;
+}
+
+.revision-action-reason {
+  display: grid;
+  gap: 6px;
+}
+
+.revision-action-reason textarea {
+  width: 100%;
+  min-height: 6rem;
+}
+
+.revision-dialog-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.revision-action-error {
+  color: #922b43;
 }
 
 .content {
   width: min(1160px, 100%);
   margin: auto;
   padding: 40px clamp(20px, 4.5vw, 64px) 70px;
+}
+
+.recipe-view {
+  padding-top: 26px;
+}
+
+.recipe-heading h1 {
+  margin: 0 0 8px;
+  font-size: clamp(1.65rem, 4vw, 2.4rem);
+}
+
+.recipe-heading p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.recipe-byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 8px;
+  font-size: 0.875rem;
+}
+
+.recipe-byline .chip {
+  margin: 0;
+}
+
+.recipe-view .file-viewer {
+  margin-block-start: 12px;
 }
 
 .hero {
@@ -463,8 +642,10 @@ pre {
   border-color: #f0c6c8;
 }
 
-.reason {
-  max-width: 42rem;
+#notice.revision-feedback:not(:empty) {
+  position: sticky;
+  top: var(--top-height);
+  z-index: 4;
 }
 
 @media (max-width: 750px) {
@@ -497,8 +678,8 @@ pre {
     display: none;
   }
 
-  .top {
-    min-height: 58px;
+  :root {
+    --top-height: 58px;
   }
 
   .content {
@@ -544,7 +725,7 @@ main,
   display: flex;
   flex-wrap: wrap;
   gap: 4px 18px;
-  margin: 4px 0 12px;
+  margin: 18px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
 }
@@ -712,17 +893,25 @@ main,
   margin: 0.75em 0;
 }
 
-#revision-actions {
-  scroll-margin-top: 12px;
-}
-
 @media (max-width: 750px) {
   .rail nav a {
     min-height: 44px;
   }
 
-  .top {
+  .top:not(.recipe-top) {
     display: none;
+  }
+
+  .app:has(.recipe-top) .rail {
+    padding: 0;
+  }
+
+  .app:has(.recipe-top) .brand {
+    display: none;
+  }
+
+  .recipe-view {
+    padding-top: 20px;
   }
 
   .content {
@@ -761,10 +950,6 @@ main,
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
-}
-
-.review-jump {
-  min-height: 44px;
 }
 
 @media (max-width: 500px) {
@@ -823,7 +1008,7 @@ main,
 
 .recipe-part > h3 {
   font-size: 1.15rem;
-  scroll-margin-top: 16px;
+  scroll-margin-top: calc(var(--top-height) + 16px);
 }
 
 .recipe-part .file-tools {
@@ -1090,7 +1275,38 @@ main,
     scroll-padding-bottom: 80px;
   }
 
+  .recipe-part {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .recipe-part > h3 {
+    padding: 8px 0 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .recipe-part .file-tools {
+    justify-content: flex-end;
+    gap: 2px;
+    padding: 2px 8px;
+  }
+
+  .recipe-part .file-tools button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .file-tool-label {
+    display: none;
+  }
+
+  .recipe-part .copy-status {
+    max-width: 12ch;
+  }
+
   .recipe-part > div:last-child {
+    grid-column: 1 / -1;
     padding: 12px;
   }
 }
