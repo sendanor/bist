@@ -15,27 +15,35 @@ export interface Statement {
    * @param values The ordered values for statement placeholders.
    */
   bind(...values: unknown[]): Statement;
+
   /** Execute the statement and return the first result or null. */
   first<T>(): Promise<T | null>;
+
   /** Execute the statement and return all matching rows. */
   all<T>(): Promise<{ results: T[] }>;
+
   /** Execute a mutation and expose its changed-row count. */
   run(): Promise<{ meta: { changes: number } }>;
 }
+
 export interface Database {
   /**
    * Prepare a SQL statement for later binding and execution.
    * @param sql The SQL text with placeholders for dynamic data.
    */
   prepare(sql: string): Statement;
+
   /**
    * Execute the supplied statements as a database batch.
    * @param statements The prepared statements in their execution order.
    */
   batch(statements: Statement[]): Promise<{ meta: { changes: number } }[]>;
 }
+
 export type User = { id: string; maintainer: boolean };
+
 export type Input = Record<string, unknown>;
+
 type Revision = {
   id: string;
   slug: string;
@@ -55,6 +63,7 @@ type Revision = {
   removal_reason: string | null;
   removal_by: string | null;
 };
+
 /** Stored code snapshot awaiting fingerprint generation after migration. */
 interface LegacySnapshot {
   readonly id: string;
@@ -217,6 +226,7 @@ interface PageBoundary {
 function pageCursor(direction: PageDirection, row: PageBoundary | undefined) {
   return row ? `${direction}|${row.sort_time}|${row.id}` : null;
 }
+
 /**
  * Decode stored revision tags before exposing them to API readers.
  * @param json JSON text persisted when a revision was submitted.
@@ -273,6 +283,7 @@ function decodeFiles(json: string | null, selected: readonly (typeof parts)[numb
       }),
   );
 }
+
 export class RequestError extends Error {
   /**
    * Construct a request failure with its caller-facing status and optional code.
@@ -288,6 +299,7 @@ export class RequestError extends Error {
     super(message);
   }
 }
+
 /**
  * Read and trim a text field while enforcing its length and presence.
  * @param value The unvalidated input value for the field.
@@ -305,6 +317,7 @@ export function str(value: unknown, name: string, max: number, optional = false)
   }
   return value.trim();
 }
+
 /**
  * Read a Cookbook revision identifier from an external request.
  * @param value Unvalidated request field.
@@ -321,6 +334,7 @@ function revisionId(value: unknown, name: string, optional = false) {
   }
   return value;
 }
+
 /**
  * Validate the version of the snapshot that the caller read.
  * @param value Version returned by the recipe endpoint.
@@ -343,6 +357,7 @@ export class Cookbook {
     private readonly db: Database,
     private readonly user: User,
   ) {}
+
   /**
    * Prepare a database statement and bind supplied positional values.
    * @param query The SQL text containing any parameter placeholders.
@@ -351,6 +366,7 @@ export class Cookbook {
   private sql(query: string, ...values: unknown[]) {
     return this.db.prepare(query).bind(...values);
   }
+
   /**
    * Require the current identity to have maintainer permissions.
    * @throws {RequestError} When the current identity lacks maintainer access.
@@ -360,6 +376,7 @@ export class Cookbook {
       throw new RequestError("Maintainer access required.", 403);
     }
   }
+
   /**
    * Read the stored recipe policy and apply settings defaults.
    * @throws {Error} When stored settings do not form an object.
@@ -387,11 +404,13 @@ export class Cookbook {
       quality: saved.quality,
     });
   }
+
   /** Return the effective code settings and supported rules for maintainers. */
   async codeSettings() {
     this.maintainer();
     return { policy: await this.readCodePolicy(), prettierOptions, eslintRules, qualityOptions };
   }
+
   /**
    * Validate and save a new code policy on behalf of a maintainer.
    * @param input The proposed recipe settings from the request body.
@@ -411,6 +430,7 @@ export class Cookbook {
     ).run();
     return { policy, prettierOptions, eslintRules, qualityOptions };
   }
+
   /**
    * Find one page of published recipes matching the requested terms and tag.
    * @param input The search filters and cursor received from the API or MCP client.
@@ -424,6 +444,7 @@ export class Cookbook {
       "published_at",
     );
   }
+
   /**
    * List one page of revisions for an author or maintainer.
    * @param input The search filters and cursor received from the API or MCP client.
@@ -446,6 +467,7 @@ export class Cookbook {
       "created",
     );
   }
+
   /**
    * Read a bounded page ordered by timestamp and revision ID.
    * @param input The submitted search filters and pagination parameters.
@@ -502,6 +524,7 @@ export class Cookbook {
       nextCursor: pageCursor("next", (backwards ? cursor : more) ? page.at(-1) : undefined),
     };
   }
+
   /**
    * Retrieve a visible recipe snapshot and optionally include review metadata.
    * @param input The slug, revision, and file parts requested by the client.
@@ -569,6 +592,7 @@ export class Cookbook {
       files: decodeFiles(row.files, selected),
     };
   }
+
   /**
    * Save a maintainer's private feedback on the whole file or a line of the current edit.
    * @param input Revision ID, slug, edit version, part, optional one-based line and comment body.
@@ -627,6 +651,7 @@ export class Cookbook {
     }
     return saved;
   }
+
   /**
    * Format and lint a snapshot and translate diagnostics into request errors.
    * @param files The unvalidated file parts supplied by the author.
@@ -640,6 +665,7 @@ export class Cookbook {
       throw new RequestError(error instanceof Error ? error.message : "Recipe validation failed.");
     }
   }
+
   /**
    * Index snapshots created before fingerprints were introduced.
    * @throws {RequestError} When more legacy snapshots remain for a later request.
@@ -819,6 +845,7 @@ export class Cookbook {
     }
     return { slug, id, state: "pending", editVersion, ...notices };
   }
+
   /**
    * Apply a review, publication, or removal action to a recipe revision.
    * @param input The target revision, requested action, and accompanying review data.

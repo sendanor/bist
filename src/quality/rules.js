@@ -528,6 +528,7 @@ export const qualityRules = {
         report(context, node, "Use a documented, named contract for this object parameter.");
       }
     },
+
     /**
      * Check that a named object parameter contract includes documentation.
      * @param node The type reference to resolve in the lexical scope.
@@ -575,6 +576,7 @@ export const qualityRules = {
         );
       }
     },
+
     /**
      * Suggest readonly for applicable class fields.
      * @param node The class property declaration under inspection.
@@ -599,6 +601,7 @@ export const qualityRules = {
         report(context, node, "Consider reusing a named guard for this primitive type check.");
       }
     },
+
     /**
      * Suggest shared validators for array and UUID checks.
      * @param node The call expression to inspect for validation patterns.
@@ -637,10 +640,12 @@ export const qualityRules = {
       JSXElement() {
         hasJsx = true;
       },
+
       /** Mark a file that contains a JSX fragment. */
       JSXFragment() {
         hasJsx = true;
       },
+
       /**
        * Collect browser access from calls to a bare identifier.
        * @param node The call to inspect before recording its callee.
@@ -650,6 +655,7 @@ export const qualityRules = {
           record(node.callee);
         }
       },
+
       /**
        * Collect browser access from constructors named by a bare identifier.
        * @param node The constructor expression whose callee should be checked.
@@ -677,6 +683,7 @@ export const qualityRules = {
           record(node);
         }
       },
+
       /** Report recorded browser accesses if the file contains JSX. */
       "Program:exit"() {
         if (hasJsx) {
@@ -701,6 +708,7 @@ export const qualityRules = {
         report(context, node, "Move visible JSX text into the project's translation catalog.");
       }
     },
+
     /**
      * Inspect text from JSX expressions and user-facing attribute expressions.
      * @param node The JSX expression container and its context.
@@ -714,6 +722,7 @@ export const qualityRules = {
         directText(context, node.expression);
       }
     },
+
     /**
      * Report untranslated literals on user-facing JSX attributes.
      * @param node The JSX attribute and its static value.

@@ -94,6 +94,7 @@ export const recipeRules = {
         ImportDeclaration(node) {
           inspect(node.source);
         },
+
         /**
          * Validate re-exports that name another module.
          * @param node The export declaration that may name a source module.
@@ -103,6 +104,7 @@ export const recipeRules = {
             inspect(node.source);
           }
         },
+
         /**
          * Validate the dependency of a wildcard re-export.
          * @param node The wildcard export and its source module.
@@ -110,6 +112,7 @@ export const recipeRules = {
         ExportAllDeclaration(node) {
           inspect(node.source);
         },
+
         /**
          * Require a verifiable path for a dynamic import.
          * @param node The dynamic import and its source expression.
@@ -117,6 +120,7 @@ export const recipeRules = {
         ImportExpression(node) {
           inspect(node.source);
         },
+
         /**
          * Apply recipe import boundaries to TypeScript import types.
          * @param node The TypeScript import type and its module reference.
@@ -124,6 +128,7 @@ export const recipeRules = {
         TSImportType(node) {
           inspect(node.source ?? node.argument?.literal ?? node.argument);
         },
+
         /**
          * Validate the path used by a TypeScript import assignment.
          * @param node The external module reference and its path.
@@ -131,6 +136,7 @@ export const recipeRules = {
         TSExternalModuleReference(node) {
           inspect(node.expression);
         },
+
         /**
          * Validate dependencies loaded through CommonJS require calls.
          * @param node The call expression whose callee may be require.

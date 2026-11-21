@@ -169,6 +169,7 @@ function moduleReferences(ast) {
       typeOnly,
     });
   }
+
   /**
    * Walk the syntax tree and record the module references on each node.
    * @param node The current syntax node in the walk.

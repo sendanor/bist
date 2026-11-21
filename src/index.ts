@@ -108,6 +108,7 @@ const headers = {
 function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers });
 }
+
 /**
  * Return a built application asset with its content type.
  * @param content The text of the generated browser asset.
@@ -118,6 +119,7 @@ function asset(content: string, type: string) {
     headers: { ...headers, "content-type": type + "; charset=utf-8" },
   });
 }
+
 /**
  * Require a plain JSON object before reading request fields.
  * @param input The decoded request value to validate.
@@ -129,11 +131,13 @@ function object(input: unknown): Input {
   }
   return input;
 }
+
 /**
  * Read a request body under the API's byte limit.
  * @param request The incoming request carrying a JSON object.
  */
 const body = (request: Request) => readJsonObject(request, 96_000);
+
 /**
  * Extract a caller-facing message from a request failure.
  * @param error The thrown value received from the handler.
@@ -159,6 +163,7 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
    * @param value The successful tool response payload.
    */
   const result = (value: unknown) => json({ jsonrpc: "2.0", id, result: value });
+
   /**
    * Return a JSON-RPC error with the request correlation ID.
    * @param code The numeric JSON-RPC error code.

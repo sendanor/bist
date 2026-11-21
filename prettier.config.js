@@ -8,4 +8,6 @@ export default {
   printWidth: 100,
   singleAttributePerLine: true,
   bracketSameLine: false,
+  plugins: ["./scripts/prettier-declaration-spacing.mjs"],
+  blankLinesBetweenDeclarations: true,
 };

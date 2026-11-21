@@ -6,6 +6,11 @@ import { recipeRules } from "./quality/recipe-rules.js";
 import { Validator } from "jsonschema";
 
 export const prettierOptions = [
+  {
+    key: "blankLinesBetweenDeclarations",
+    label: "Blank lines between declarations",
+    default: true,
+  },
   { key: "bracketSameLine", label: "Closing bracket on the same line", default: false },
   { key: "bracketSpacing", label: "Spaces inside object braces", default: true },
   {
@@ -110,6 +115,7 @@ interface ValueRuleContext {
    */
   report(diagnostic: ValueDiagnostic): void;
 }
+
 interface ValueDiagnostic {
   readonly node: object;
   readonly message: string;
@@ -121,6 +127,7 @@ export const eslintRules = [...coreRules.keys()].sort();
 const schemaValidator = new Validator();
 
 type PolicyValue = string | number | boolean;
+
 type Severity = "off" | "warn" | "error";
 const documentationRule = "quality/documentation";
 export const qualityOptions = [
@@ -135,7 +142,9 @@ export const qualityOptions = [
   },
 ] as const;
 type QualityKey = (typeof qualityOptions)[number]["key"];
+
 type PartName = "source" | "interface" | "tests";
+
 export type Policy = {
   prettier: Record<string, PolicyValue>;
   eslint: ESLintConfig.RulesRecord;

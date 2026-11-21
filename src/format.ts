@@ -19,6 +19,7 @@ import { bundledRules, defaultCodePolicy, type Policy } from "./code-policy";
 import { normalizeStyles } from "./quality/css";
 import { virtualFiles } from "./quality/recipe-rules.js";
 import { checkRecipeTypes } from "./quality/recipe-types";
+import { spaceDeclarations } from "./quality/declaration-spacing.js";
 
 export const parts = [
   "source",
@@ -48,6 +49,7 @@ function limitDiagnostics(messages: readonly string[]) {
  * @param policy The effective lint and formatting policy for the revision.
  */
 export async function normalizeFiles(value: unknown, policy: Policy = defaultCodePolicy) {
+  const { blankLinesBetweenDeclarations, ...prettier } = policy.prettier;
   if (!isRecord(value)) {
     throw new Error("Provide a files object.");
   }
@@ -88,7 +90,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
     }
     if (key === "styles") {
       try {
-        const { text, findings } = await normalizeStyles(content, policy.prettier);
+        const { text, findings } = await normalizeStyles(content, prettier);
         if (encoder.encode(text).length > 12000) {
           throw new Error("Styles exceed 12 KB after formatting.");
         }
@@ -147,7 +149,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
         },
       };
       formatted = await format(content, {
-        ...policy.prettier,
+        ...prettier,
         parser: "typescript",
         plugins: [
           typescript,
@@ -220,10 +222,13 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
         (message.severity === 2 ? errors : warnings).push(describe(message));
       }
     }
-    if (encoder.encode(formatted).length > 12000) {
+    const spaced = blankLinesBetweenDeclarations
+      ? spaceDeclarations(formatted, virtualFiles[part])
+      : formatted;
+    if (encoder.encode(spaced).length > 12000) {
       throw new Error(`${key} exceeds 12 KB after formatting.`);
     }
-    result[key as Part] = formatted;
+    result[key as Part] = spaced;
   }
   if (hasTypeScript && policy.quality.typeCheck !== "off" && errors.length === 0) {
     const target = policy.quality.typeCheck === "error" ? errors : warnings;

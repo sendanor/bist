@@ -30,6 +30,7 @@ export function browserCopy(ast) {
       ? node.expression.text
       : undefined;
   }
+
   /**
    * Inspect translatable values and visit child nodes recursively.
    * @param node The current browser syntax node.

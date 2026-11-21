@@ -38,6 +38,7 @@ export async function normalizeStyles(content: string, policy: Parameters<typeof
         throw Object.assign(error, location?.start);
       }
     },
+
     /**
      * Abort recipe validation instead of accepting recovered CSS syntax.
      * @param error The syntax error emitted by the CSS parser.

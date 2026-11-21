@@ -64,6 +64,7 @@ function el(tag, props = {}, ...children) {
   node.append(...children.filter((child) => child != null && child !== false));
   return node;
 }
+
 /**
  * Create the decorative icon for a named toolbar action.
  * @param name The key of the icon in the toolbar glyph set.
@@ -78,6 +79,7 @@ function icon(name) {
   svg.append(use);
   return svg;
 }
+
 /**
  * Create a status banner with the appropriate feedback role.
  * @param message The status message shown to the reader.
@@ -89,6 +91,7 @@ function banner(message = "", error = false, revisionFeedback = false) {
   notice.classList.toggle("error", error);
   notice.classList.toggle("revision-feedback", revisionFeedback);
 }
+
 /**
  * Make a button that invokes a supplied click handler.
  * @param text The visible label on the button.
@@ -98,6 +101,7 @@ function banner(message = "", error = false, revisionFeedback = false) {
 function btn(text, fn, style = "") {
   return el("button", { type: "button", className: style, onclick: fn }, text);
 }
+
 /**
  * Make a link styled as an application button.
  * @param text The visible label on the link.
@@ -107,6 +111,7 @@ function btn(text, fn, style = "") {
 function buttonLink(text, href, style = "") {
   return el("a", { href, className: "button " + style }, text);
 }
+
 /**
  * Build a labelled control for a form field.
  * @param name The form key used for submission.
@@ -120,6 +125,7 @@ function field(name, title, options = {}, value = "", textarea = false) {
   control.value = value;
   return el("label", {}, title, control);
 }
+
 /**
  * Create a page heading with optional help text.
  * @param text The main heading text.
@@ -128,6 +134,7 @@ function field(name, title, options = {}, value = "", textarea = false) {
 function title(text, detail) {
   return el("div", {}, el("h1", {}, text), detail && el("p", { className: "muted" }, detail));
 }
+
 /**
  * Build a link to a particular revision in its browsing context.
  * @param recipe The summary containing the recipe slug and revision ID.
@@ -143,6 +150,7 @@ function routeRecipe(recipe, section) {
     encodeURIComponent(recipe.id)
   );
 }
+
 /**
  * Create an empty-state message with an optional next action.
  * @param titleText The short heading shown in the empty state.
@@ -159,6 +167,7 @@ function empty(titleText, detail, action) {
     action,
   );
 }
+
 /**
  * Render a compact tag or status label.
  * @param text The text displayed inside the label.
@@ -167,6 +176,7 @@ function empty(titleText, detail, action) {
 function chip(text, style = "") {
   return el("span", { className: "chip " + style }, text);
 }
+
 /**
  * Render links for a list of recipe revision summaries.
  * @param rows The ordered revision summaries to display.
@@ -189,6 +199,7 @@ function list(rows, section) {
     ),
   );
 }
+
 /**
  * Build a link to a filtered list page without carrying filters across sections.
  * @param section The library, personal revisions, or review queue.
@@ -609,6 +620,7 @@ function readableMarkdown(value) {
   prose.append(content);
   return prose;
 }
+
 /**
  * Render a code listing with its line numbers and empty state.
  * @param lines The lines to display in source order.
@@ -643,6 +655,7 @@ function codeBox(lines, wrap, label) {
     ),
   );
 }
+
 /**
  * Render the previous and current contents as aligned columns.
  * @param before The previous text used as the diff baseline.
@@ -693,6 +706,7 @@ function diff(before, after, wrap) {
     codeBox(rows, wrap, "Changes from base revision"),
   );
 }
+
 /**
  * Tokenize and highlight source lines for the recipe viewer.
  * @param source The plain source text to highlight.
@@ -741,6 +755,7 @@ function highlightedLines(source, language) {
     marker: String(index + 1),
   }));
 }
+
 /**
  * Give a file tool a visible label on wide screens and a name at every width.
  * @param button Tool button to label.
@@ -752,6 +767,7 @@ function labelFileTool(button, symbol, label) {
   button.title = label;
   button.replaceChildren(icon(symbol), el("span", { className: "file-tool-label" }, label));
 }
+
 /**
  * Open an inline composer for a whole file or a source line.
  * @param comments Container that holds the feedback and composer.
@@ -1063,6 +1079,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
     ),
   };
 }
+
 /**
  * Assemble the available recipe parts into the revision viewer.
  * @param recipe The current recipe revision to display.
@@ -1326,6 +1343,7 @@ function revisionControls(recipe, section) {
   });
   return wrapper;
 }
+
 /**
  * Load a revision and build the recipe page with its toolbar.
  * @param section The section used for back navigation.
@@ -1373,6 +1391,7 @@ async function recipePage(section, slug, revision) {
     ],
   };
 }
+
 /** Build the maintainer form for editing the recipe quality policy. */
 async function settingsPage() {
   const { policy, prettierOptions, eslintRules, qualityOptions } = await api("settings");
@@ -1527,6 +1546,7 @@ async function settingsPage() {
   });
   return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
 }
+
 /** Render the current page path and discard stale asynchronous results. */
 async function render() {
   const current = ++renderId;

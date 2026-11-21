@@ -32,4 +32,9 @@ received. Migrations are exercised against SQLite-compatible D1 in the integrati
 checks use static, explicitly scoped rules rather than inferring a layer or a translation contract
 from arbitrary submitted code.
 
+The repository Prettier config enables the local `blankLinesBetweenDeclarations` option for
+JavaScript and TypeScript. It adds a blank line between adjacent declarations, before any JSDoc
+attached to the next definition. Overloads stay together. Recipes use the same spacing by default.
+Maintainers can toggle **Blank lines between declarations** under **Settings → Prettier**.
+
 See [development instructions](README.md#development) and [the original handoff](HANDOFF.md).

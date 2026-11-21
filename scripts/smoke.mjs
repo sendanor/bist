@@ -43,6 +43,7 @@ function dispatch(path, user, data) {
     body: data && JSON.stringify(data),
   });
 }
+
 /**
  * Invoke a local MCP tool and require a successful result.
  * @param name The MCP tool name to invoke.
@@ -60,6 +61,7 @@ async function tool(name, args, user = "author") {
   assert.equal(result?.isError, undefined, result?.content[0]?.text);
   return JSON.parse(result.content[0].text);
 }
+
 /**
  * Execute repository-owned recipe fixtures from the files retrieved through the Worker.
  * @param files Known trusted source and test files.
@@ -169,6 +171,7 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   assert.equal((await dispatch("/api/settings", "author", settings.policy)).status, 403);
   assert.equal(settings.policy.prettier.printWidth, 100);
   assert.equal(settings.policy.prettier.singleAttributePerLine, true);
+  assert.equal(settings.policy.prettier.blankLinesBetweenDeclarations, true);
   assert.equal(settings.policy.quality.warningsAsErrors, false);
   assert.equal(settings.policy.eslint["quality/documentation"], "error");
 
@@ -183,9 +186,33 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   const upgraded = (await (await dispatch("/api/settings", "maintainer")).json()).policy;
   assert.equal(upgraded.prettier.printWidth, 90);
   assert.equal(upgraded.prettier.singleQuote, true);
+  assert.equal(upgraded.prettier.blankLinesBetweenDeclarations, true);
   assert.equal(upgraded.eslint["no-debugger"], 0);
   assert.equal(upgraded.eslint.curly, "error");
   assert.equal(upgraded.eslint["quality/documentation"], "error");
+  assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
+  const spacingPayload = {
+    ...payload,
+    slug: "declaration-spacing",
+    files: {
+      source:
+        "export type First = string;\n/** Describe the second type. */\nexport type Second = number;",
+    },
+  };
+  const spacedRecipe = await tool("submit_recipe", spacingPayload);
+  const reference = { slug: spacedRecipe.slug, revision: spacedRecipe.id };
+  assert.match((await tool("get_recipe", reference)).files.source, /;\n\n\/\*\*/u);
+  const noSpacing = {
+    ...settings.policy,
+    prettier: { ...settings.policy.prettier, blankLinesBetweenDeclarations: false },
+  };
+  assert.equal((await dispatch("/api/settings", "maintainer", noSpacing)).status, 200);
+  await tool("submit_recipe", {
+    ...spacingPayload,
+    replace: spacedRecipe.id,
+    editVersion: spacedRecipe.editVersion,
+  });
+  assert.match((await tool("get_recipe", reference)).files.source, /[^\n]\n\/\*\*/u);
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
   const shell = await (await dispatch("/", null)).text();
   assert.match(shell, /recipes and guides/);
