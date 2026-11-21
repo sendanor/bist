@@ -19,6 +19,13 @@ export interface DocsHit {
   readonly excerpt: string;
 }
 
+/** JSON-RPC fields constructed by the fixed documentation adapters. */
+interface McpMessage {
+  readonly method: string;
+  readonly id?: number;
+  readonly params?: object;
+}
+
 /**
  * Decode a bounded MCP reply in the documented JSON or event-stream format.
  * @param response Upstream HTTP reply from the fixed OpenAI Docs endpoint.
@@ -105,18 +112,25 @@ async function callDocsMcp(
     accept: "application/json, text/event-stream",
     "content-type": "application/json",
   });
+  let stage = "initialize";
+  let status = 0;
   /**
    * Send one JSON-RPC operation to the fixed endpoint without credentials or redirects.
    * @param message Protocol fields for initialization, notification or search.
    */
-  const post = (message: object) =>
-    send(endpoint, {
+  async function post(message: McpMessage) {
+    stage = message.method;
+    status = 0;
+    const response = await send(endpoint, {
       method: "POST",
       redirect: "manual",
       signal,
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", ...message }),
     });
+    status = response.status;
+    return response;
+  }
   try {
     if (!(await authorized())) {
       return null;
@@ -131,6 +145,7 @@ async function callDocsMcp(
       },
     });
     if ((await reply(response, 1))?.protocolVersion !== protocol) {
+      console.warn("Documentation MCP rejected initialization", name, status);
       return null;
     }
     const session = response.headers.get("mcp-session-id");
@@ -143,7 +158,11 @@ async function callDocsMcp(
     headers.set("mcp-protocol-version", protocol);
     const notification = await post({ method: "notifications/initialized" });
     await notification.body?.cancel();
-    if (!notification.ok || !(await authorized())) {
+    if (!notification.ok) {
+      console.warn("Documentation MCP rejected notification", name, status);
+      return null;
+    }
+    if (!(await authorized())) {
       return null;
     }
     const search = await post({
@@ -151,8 +170,19 @@ async function callDocsMcp(
       id: 2,
       params: { name, arguments: args },
     });
-    return await reply(search, 2);
+    const result = await reply(search, 2);
+    if (!result || result.isError === true) {
+      console.warn("Documentation MCP rejected search", name, status);
+    }
+    return result;
   } catch {
+    console.warn(
+      "Documentation MCP request failed",
+      name,
+      stage,
+      status,
+      signal.aborted ? "timeout" : "unreadable reply",
+    );
     return null;
   }
 }
