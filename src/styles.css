@@ -634,7 +634,8 @@ textarea.code-input {
   text-decoration: underline;
 }
 
-pre {
+pre,
+.code-box {
   margin: 0;
   background: #181c33;
   color: #ecedff;
@@ -832,6 +833,26 @@ main,
   color: #b7bedc;
   text-align: right;
   user-select: none;
+}
+
+.comment-line-button {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.commentable-line:hover,
+.commentable-line:focus-within {
+  background: #282e4a;
+}
+
+.comment-line-button:hover,
+.comment-line-button:focus-visible {
+  color: #fff;
 }
 
 .line-value {
@@ -1403,65 +1424,24 @@ main,
   list-style: none;
 }
 
-.review-source {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
 .file-comment-thread {
   margin-block: 0 12px;
 }
 
-.file-comment-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
+.file-comment-thread:empty,
+.line-comment-thread:empty {
+  display: none;
 }
 
-.file-comment-heading h4 {
-  margin: 0;
-}
-
-.review-line {
-  display: grid;
-  grid-template-columns: minmax(3rem, auto) minmax(0, 1fr);
-  align-items: baseline;
-  gap: 0 8px;
-  padding: 2px 8px;
-}
-
-.review-line + .review-line {
-  border-top: 1px solid var(--line);
-}
-
-.review-line > code,
 .historical-comment > code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.review-line-button,
-.review-line-number {
-  min-height: 30px;
-  justify-content: flex-end;
-  padding: 3px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  text-align: end;
-  font-variant-numeric: tabular-nums;
-}
-
-.review-line-button:hover,
-.review-line-button:focus-visible {
-  background: var(--paper);
-}
-
 .line-comment-thread {
-  grid-column: 2;
   min-width: 0;
+  margin-inline-start: 4.25ch;
+  color: var(--ink);
 }
 
 .review-comment,

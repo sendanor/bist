@@ -17,9 +17,10 @@ revision, propose an improvement. This creates a new revision that needs its own
 
 Maintain a separation between review and publication. A maintainer can approve a revision
 or request changes. Publishing an approved revision makes it the default in search.
-Open **Comments** on a file part to review it. Maintainers can select **Comment on file**
-to discuss the whole file or select a line number to comment on an individual line,
-including Markdown and blank lines. The author and maintainers can read the feedback.
+Maintainers can click a code line or use its line-number button to comment directly
+under the line. For documentation and agent instructions, open **Markdown source** to
+comment on the original Markdown lines, including blank lines. Select **Comment on file**
+to discuss the whole file. The author and maintainers can read the feedback.
 After a draft edit, earlier comments appear under **Comments on earlier edits**, with
 the original excerpt preserved for each line comment.
 

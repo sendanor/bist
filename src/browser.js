@@ -622,38 +622,75 @@ function readableMarkdown(value) {
 }
 
 /**
- * Render a code listing with its line numbers and empty state.
+ * Render a code listing with its line numbers and optional inline review.
  * @param lines The lines to display in source order.
  * @param wrap Whether line wrapping is enabled in the viewer.
  * @param label The viewer's accessible label.
+ * @param review File review context, when real source lines can receive comments.
  */
-function codeBox(lines, wrap, label) {
+function codeBox(lines, wrap, label, review) {
   return el(
-    "pre",
-    { className: "code-box" + (wrap ? " wrap" : ""), tabindex: "0", "aria-label": label },
+    "div",
+    {
+      className: "code-box" + (wrap ? " wrap" : ""),
+      tabindex: "0",
+      role: "group",
+      "aria-label": label,
+    },
+    ...lines.map((line, index) => codeRow(line, index + 1, review)),
+  );
+}
+
+/**
+ * Show one source line and give reviewers a mouse and keyboard comment target.
+ * @param row The displayed text, marker, and optional diff style.
+ * @param number The one-based line number in the current file.
+ * @param review File feedback and permissions, when comments are available.
+ */
+function codeRow(row, number, review) {
+  const { value, marker, style } = row;
+  const comments = review?.current.get(number) ?? [];
+  const thread =
+    (review?.canComment || comments.length > 0) &&
+    el("div", { className: "line-comment-thread" }, ...comments.map(reviewCommentText));
+  /**
+   * Open the inline composer underneath this line and save feedback at its anchor.
+   */
+  function comment() {
+    openCommentComposer(thread, trigger, (body) =>
+      saveReviewComment(review.recipe, review.part, number, body),
+    );
+  }
+  const trigger = review?.canComment && btn(marker, comment, "line-marker comment-line-button");
+  if (trigger) {
+    const label = t("comment-on-line") + " " + number;
+    trigger.setAttribute("aria-label", label);
+    trigger.title = label;
+  }
+  const line = el(
+    "div",
+    { className: "code-line " + (style ?? "") + (trigger ? " commentable-line" : "") },
+    trigger || el("span", { className: "line-marker", "aria-hidden": "true" }, marker),
     el(
       "code",
-      {},
-      ...lines.map(({ value, marker, style }) =>
+      { className: "line-value" },
+      style &&
         el(
           "span",
-          { className: "code-line " + (style ?? "") },
-          el("span", { className: "line-marker", "aria-hidden": "true" }, marker),
-          el(
-            "span",
-            { className: "line-value" },
-            style &&
-              el(
-                "span",
-                { className: "visually-hidden" },
-                style === "diff-added" ? t("added") : t("removed"),
-              ),
-            value?.nodeType ? value : value || " ",
-          ),
+          { className: "visually-hidden" },
+          style === "diff-added" ? t("added") : t("removed"),
         ),
-      ),
+      value?.nodeType ? value : value || " ",
     ),
   );
+  if (trigger) {
+    line.addEventListener("click", (event) => {
+      if (event.target !== trigger && window.getSelection()?.isCollapsed !== false) {
+        comment();
+      }
+    });
+  }
+  return el("div", {}, line, thread);
 }
 
 /**
@@ -833,7 +870,7 @@ function openCommentComposer(comments, trigger, submit) {
     el("div", { className: "review-comment-actions" }, cancel, save),
   );
   comments.append(form);
-  input.focus({ preventScroll: true });
+  input.focus();
 }
 
 /**
@@ -857,102 +894,50 @@ async function saveReviewComment(recipe, part, line, body) {
 }
 
 /**
- * Display comments about the whole file with an optional composer.
- * @param recipe Revision and permissions for the current review.
- * @param part File part that owns the thread.
- * @param comments Whole-file comments on the current edit.
- * @param canComment Whether this file exists and the viewer can comment on it.
+ * Group earlier comments separately from comments on the current file lines.
+ * @param recipe Revision and its visible review history.
+ * @param part File part that owns these comments.
  */
-function fileCommentThread(recipe, part, comments, canComment) {
-  if (!comments.length && !canComment) {
-    return null;
+function fileComments(recipe, part) {
+  const current = new Map();
+  const earlier = [];
+  for (const item of recipe.review?.comments ?? []) {
+    if (item.part !== part) {
+      continue;
+    }
+    if (item.editVersion === recipe.editVersion) {
+      const comments = current.get(item.line) ?? [];
+      comments.push(item);
+      current.set(item.line, comments);
+    } else {
+      earlier.push(item);
+    }
   }
-  const feedback = el("div", {}, ...comments.map(reviewCommentText));
-  const trigger =
-    canComment &&
-    btn(t("comment-on-file"), () =>
-      openCommentComposer(feedback, trigger, (body) => saveReviewComment(recipe, part, null, body)),
-    );
-  return el(
-    "section",
-    { className: "file-comment-thread" },
-    el("div", { className: "file-comment-heading" }, el("h4", {}, t("file-comments")), trigger),
-    feedback,
-  );
+  return { current, earlier };
 }
 
 /**
- * Build a review view with whole-file feedback and numbered source lines.
- * @param recipe Revision being reviewed, including its current snapshot version.
- * @param part File part whose source and comments will be displayed.
- * @param value Stored file content for the selected part.
+ * Show feedback retained from earlier draft versions with its original anchor.
+ * @param comments Comments from earlier edits of the current file.
  */
-function reviewFile(recipe, part, value) {
-  const current = new Map();
-  const earlier = [];
-  for (const comment of recipe.review.comments.filter((item) => item.part === part)) {
-    if (comment.editVersion === recipe.editVersion) {
-      const line = current.get(comment.line) ?? [];
-      line.push(comment);
-      current.set(comment.line, line);
-    } else {
-      earlier.push(comment);
-    }
-  }
-  const lines = value === undefined ? [] : sourceLines(value);
-  const rows = el("div", { className: "review-source", role: "group", "aria-label": parts[part] });
-  for (const [index, text] of lines.entries()) {
-    const line = index + 1;
-    const feedback = el(
-      "div",
-      { className: "line-comment-thread" },
-      ...(current.get(line) ?? []).map(reviewCommentText),
-    );
-    const marker = recipe.review.canComment
-      ? btn(
-          String(line),
-          () =>
-            openCommentComposer(feedback, marker, (body) =>
-              saveReviewComment(recipe, part, line, body),
-            ),
-          "review-line-button",
-        )
-      : el("span", { className: "review-line-number" }, String(line));
-    if (recipe.review.canComment) {
-      const label = t("comment-on-line") + " " + line;
-      marker.setAttribute("aria-label", label);
-      marker.title = label;
-    }
-    rows.append(
-      el("div", { className: "review-line" }, marker, el("code", {}, text || " "), feedback),
-    );
-  }
-  return el(
-    "div",
-    {},
-    fileCommentThread(
-      recipe,
-      part,
-      current.get(null) ?? [],
-      recipe.review.canComment && value !== undefined,
-    ),
-    lines.length > 0 && rows,
-    earlier.length > 0 &&
-      el(
-        "section",
-        { className: "earlier-comments" },
-        el("h4", {}, t("comments-on-earlier-edits")),
-        ...earlier.map((comment) =>
-          el(
-            "div",
-            { className: "historical-comment" },
-            comment.line === null
-              ? el("strong", {}, t("whole-file"))
-              : el("code", {}, t("line") + " " + comment.line + " · " + comment.excerpt),
-            reviewCommentText(comment),
-          ),
+function earlierComments(comments) {
+  return (
+    comments.length > 0 &&
+    el(
+      "section",
+      { className: "earlier-comments" },
+      el("h4", {}, t("comments-on-earlier-edits")),
+      ...comments.map((comment) =>
+        el(
+          "div",
+          { className: "historical-comment" },
+          comment.line === null
+            ? el("strong", {}, t("whole-file"))
+            : el("code", {}, t("line") + " " + comment.line + " · " + comment.excerpt),
+          reviewCommentText(comment),
         ),
       ),
+    )
   );
 }
 
@@ -996,22 +981,39 @@ function fileSection(recipe, key, value, previous, hasBase) {
   );
   const area = el("div", { id: "recipe-part-content-" + key });
   const status = el("span", { className: "copy-status", role: "status" });
-  let reviewing = false;
+  const { current, earlier } = fileComments(recipe, key);
+  const canComment = recipe.review?.canComment && value !== undefined;
+  const feedback = el(
+    "div",
+    { className: "file-comment-thread" },
+    ...(current.get(null) ?? []).map(reviewCommentText),
+  );
+  const fileComment =
+    canComment &&
+    btn(t("comment-on-file"), () =>
+      openCommentComposer(feedback, fileComment, (body) =>
+        saveReviewComment(recipe, key, null, body),
+      ),
+    );
+  if (fileComment) {
+    labelFileTool(fileComment, "comment", t("comment-on-file"));
+  }
+  let raw = prose && [...current.keys()].some(Number.isInteger);
   let comparing = false;
   let wrap = true;
-  let renderedLines;
+  let code;
+  let markdown;
   const compare =
     hasBase &&
     btn(t("show-changes"), () => {
       comparing = !comparing;
-      reviewing = false;
       renderPart();
     });
-  const hasFeedback = recipe.review?.comments.some((comment) => comment.part === key);
-  const reviewButton =
-    (hasFeedback || (recipe.review?.canComment && value !== undefined)) &&
-    btn(t("comments"), () => {
-      reviewing = !reviewing;
+  const markdownSource =
+    prose &&
+    value !== undefined &&
+    btn(t("markdown-source"), () => {
+      raw = comparing || !raw;
       comparing = false;
       renderPart();
     });
@@ -1036,35 +1038,44 @@ function fileSection(recipe, key, value, previous, hasBase) {
       labelFileTool(compare, "diff", comparing ? t("show-file") : t("show-changes"));
       compare.setAttribute("aria-pressed", String(comparing));
     }
-    if (reviewButton) {
-      labelFileTool(reviewButton, "comment", reviewing ? t("show-file") : t("comments"));
-      reviewButton.setAttribute("aria-pressed", String(reviewing));
+    if (markdownSource) {
+      labelFileTool(
+        markdownSource,
+        raw && !comparing ? "doc" : "code",
+        raw && !comparing ? t("rendered-markdown") : t("markdown-source"),
+      );
+      markdownSource.setAttribute("aria-pressed", String(raw && !comparing));
     }
-    wrapButton.hidden = reviewing || (!comparing && (prose || value === undefined));
+    wrapButton.hidden = !comparing && (value === undefined || (prose && !raw));
     wrapButton.setAttribute("aria-pressed", String(wrap));
-    copy.hidden = value === undefined || comparing || reviewing;
-    const content = reviewing
-      ? reviewFile(recipe, key, value)
-      : comparing
-        ? diff(previous, value, wrap)
-        : value === undefined
-          ? el("p", { className: "file-empty" }, t("this-revision-omits-this-file"))
-          : prose
-            ? readableMarkdown(value)
-            : codeBox(
-                (renderedLines ??= highlightedLines(
-                  value,
-                  key === "styles" ? "css" : "typescript",
-                )).map(({ value: line, marker }) => ({
-                  value: line.nodeType ? line.cloneNode(true) : line,
-                  marker,
-                })),
-                wrap,
-                name,
-              );
-    area.replaceChildren(content);
+    copy.hidden = value === undefined || comparing;
+    let content;
+    if (comparing) {
+      content = diff(previous, value, wrap);
+    } else if (value === undefined) {
+      content = el("p", { className: "file-empty" }, t("this-revision-omits-this-file"));
+    } else if (prose && !raw) {
+      content = markdown ??= readableMarkdown(value);
+    } else {
+      if (!code) {
+        const lines = prose
+          ? sourceLines(value).map((value, index) => ({ value, marker: String(index + 1) }))
+          : highlightedLines(value, key === "styles" ? "css" : "typescript");
+        code = codeBox(lines, wrap, name, {
+          recipe,
+          part: key,
+          current,
+          canComment,
+        });
+      }
+      code.classList.toggle("wrap", wrap);
+      content = code;
+    }
+    if (area.firstChild !== content) {
+      area.replaceChildren(content);
+    }
   }
-  for (const control of [compare, reviewButton, wrapButton].filter(Boolean)) {
+  for (const control of [compare, markdownSource, wrapButton].filter(Boolean)) {
     control.setAttribute("aria-controls", area.id);
   }
   renderPart();
@@ -1074,8 +1085,17 @@ function fileSection(recipe, key, value, previous, hasBase) {
       "section",
       { className: "panel recipe-part", "aria-labelledby": heading.id },
       heading,
-      el("div", { className: "file-tools" }, compare, reviewButton, wrapButton, copy, status),
-      area,
+      el(
+        "div",
+        { className: "file-tools" },
+        compare,
+        markdownSource,
+        fileComment,
+        wrapButton,
+        copy,
+        status,
+      ),
+      el("div", {}, feedback, area, earlierComments(earlier)),
     ),
   };
 }
