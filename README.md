@@ -1,31 +1,89 @@
 # Code Cookbook
 
-A TypeScript Worker with a browser workspace and a stateless MCP endpoint. Both surfaces use the same D1 database. A recipe can contain code, documentation, agent instructions, or any combination of these. At least one part is required. The cookbook handles recipe files as text and applies bundled Prettier and ESLint to TypeScript parts. Maintainers can configure formatting, lint, type, and optional stylesheet checks in Settings. See the [quality policy](QUALITY.md). The policy applies to new revisions submitted through the website and MCP. Submitted files are never run by the service.
+Code Cookbook, also called Bist, is a shared library of reusable code recipes and guides for
+software teams and coding agents. Save a small solution with its tests or usage notes, review it
+before sharing it, and retrieve the parts you need for another project.
 
-![Code Cookbook showing the isRecord recipe, its documentation and source, the sidebar menu, and the top toolbar.](docs/is-record.jpg)
+- Search published recipes by keyword or tag in the browser or through the Model Context
+  Protocol (MCP). Fetch only the parts you need.
+- Submit TypeScript, public interfaces, tests, CSS, documentation, or agent instructions. A guide
+  can consist of documentation or instructions alone.
+- Review a specific revision before publishing it. Maintainers can compare edits and leave private
+  comments on individual lines, including lines in Markdown files.
+
+![The isRecord recipe in Code Cookbook with the sidebar, toolbar, documentation, source, and tests.](docs/is-record.jpg)
+
+This README describes the source in the `develop` branch. Hosted instances may run an earlier
+version. Recipe tests are stored and checked as text. Run them in the project where you reuse
+the code.
+
+## Try it locally
+
+You need Git, Bash, Node.js 24 with npm, and access to the npm registry. The local preview uses test
+data and a synthetic maintainer account. It needs no ChatGPT account or hosted database.
+
+Clone the repository and build the Worker from the repository root.
+
+```sh
+git clone --branch develop https://github.com/sendanor/bist.git
+cd bist
+npm ci
+npm run build
+```
+
+Start the [local browser preview](docs/local-preview.md) and open `http://127.0.0.1:8787/`.
+In **Contribute**, select **Fill with example**, then **Submit for review**. The recipe opens
+with a **Pending review** status. You can approve and publish it from **Revision actions**
+using the preview account, then find **Batch items into chunks** in the recipe library.
+
+If you already have access to a hosted instance, open its URL and sign in with ChatGPT.
+The instance operator manages access.
+
+## Use recipes
+
+A revision is one complete snapshot of a recipe. Use **Edit draft** to update your own
+unapproved revision in place. To improve an approved or published revision, create a new
+revision from it. Approval belongs to that specific revision, and publishing makes it the
+default version in search. For review comments and removal, see the
+[recipe workflow](docs/recipe-workflow.md).
+
+MCP clients can use `search_recipes` to find a slug and `get_recipe` to retrieve a published
+revision or selected parts. The [recipe workflow](docs/recipe-workflow.md#use-mcp) describes the
+endpoint and submission fields. The [local preview](docs/local-preview.md#try-mcp) includes a
+runnable MCP request.
+
+## Configure an instance
+
+Maintainers configure formatting, lint, type, CSS, and duplicate checks in **Settings**.
+See the [quality policy](QUALITY.md) for defaults, configurable checks, and supported inputs.
+
+The included hosting configuration targets ChatGPT Sites and uses a Cloudflare Worker with a
+D1 database binding named `DB`. To prepare an instance-specific configuration, copy
+[the example manifest](.openai/hosting.example.json) to `.openai/hosting.json` and set its
+`project_id` to your Sites project ID. The local manifest is ignored by Git. Configure
+`MAINTAINER_EMAILS` as a comma-separated list of verified ChatGPT email addresses in the
+hosted runtime. Apply the [D1 migrations](drizzle/) to the instance database. Keep deployment
+settings and credentials outside the public repository.
 
 ## Development
 
-Run `npm ci`, `npm run check`, `npm run build`, and `node scripts/smoke.mjs`. The smoke test uses the actual Worker bundle in workerd, applies the D1 migration, verifies the author/maintainer/reader flow and persistence across runtime restart, and executes a known fixture in a separate consumer project. It reports measured reuse latency and selective versus full retrieval payload sizes and tokens using the o200k_base tokenizer.
+From the repository root, after `npm ci`, run the repository checks and tests.
 
-The Sites manifest declares `DB` and MCP. For a private deployment, copy `.openai/hosting.example.json` to the ignored `.openai/hosting.json` and set the target Sites project ID there. Local builds can use the example directly. Keep the Site’s access policy private or scoped to trusted collaborators. Set `MAINTAINER_EMAILS` in the hosted runtime as a comma-separated allowlist of verified ChatGPT email addresses. A signed-in Site member can contribute. Maintainers can review, publish, quarantine, and approve protected removal. The owner may review their own submission in this single-maintainer MVP. MCP tools can submit, search, retrieve, and list owned revisions. Moderation uses the browser.
+```sh
+npm run check
+npm test
+```
 
-A new recipe uses a lowercase, hyphenated slug. To update your own draft before approval, use **Edit draft** or pass its ID as `replace` and its current `editVersion` to MCP. Include the complete file snapshot. You can also remove your own unapproved revision from its review actions, including after a reviewer requests changes. To improve a reviewed and approved revision, use its ID as `base` to create a new revision. Publishing replaces the default revision shown in search. Quarantine immediately hides a revision from contributors and clears the published pointer if it was current. Protected removal requires a recorded reason and a subsequent maintainer action.
+The tests exercise the built Worker with Miniflare and a temporary local database. They cover
+submission, review, publication, and retrieval. They run trusted repository fixtures in a
+separate consumer project. See [AGENTS.md](AGENTS.md) for contribution and commit practices.
+[HANDOFF.md](HANDOFF.md) records historical context and plans.
 
-Each code part and each documentation or agent instruction part has a SHA-256 fingerprint.
-Code duplication compares the full code snapshot. Documentation and instructions are checked
-individually. Maintainers can set duplicate checks to Off, Warn, or Error in Settings. Warn
-asks the author before saving. MCP callers can acknowledge it with `allowDuplicates: true`.
-Error blocks the submission. The defaults block duplicate code and warn about duplicate prose.
-Checks look at the author's active revisions and published recipes. Older revisions are indexed
-in batches on submission. Retry if indexing is still in progress.
+Report reproducible bugs or request features through
+[GitHub Issues](https://github.com/sendanor/bist/issues). The repository does not document a
+separate channel for security reports.
 
-A recipe's test part can import `describe` and `it` from Node.js 24's built-in `node:test` and use `node:assert/strict` for assertions.
-Save the source as `source.ts` and the tests as `recipe.test.ts`, then run
-`node --test recipe.test.ts`. Bist type-checks the test and assertion APIs using the pinned
-Node declarations. Recipe tests run in the consumer's environment.
+## License
 
-Maintainers can open **Line comments** on any recipe part, including raw Markdown and agent
-instructions, and select a line number to leave feedback. Only the author and maintainers can
-read the feedback. When the author replaces a draft, earlier comments keep their original
-line numbers and excerpts under **Comments on earlier edits**.
+[LICENSE](LICENSE) contains the MIT License. The license metadata in
+[package.json](package.json) and [package-lock.json](package-lock.json) currently says ISC.
