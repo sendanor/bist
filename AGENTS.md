@@ -15,3 +15,5 @@ built for release as public.
   file leaves earlier copies in Git.
 - Run `npm run check` and `npm test` for code changes. See [QUALITY.md](QUALITY.md)
   for the checks and their scope.
+- Always stage and commit your changes when the task is complete. Keep each
+  commit small and focused, and use a message that describes what it changes.
