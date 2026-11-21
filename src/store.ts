@@ -328,10 +328,13 @@ export function decodeLlmFindings(encoded: string | null): LlmFinding[] {
   if (!isArray(data)) {
     return [];
   }
-  return parts.flatMap((part) => {
-    const found = data.find((entry) => isRecord(entry) && entry.part === part);
-    return isRecord(found) && isString(found.reason) ? [{ part, reason: found.reason }] : [];
-  });
+  return parts.flatMap((part) =>
+    data.flatMap((entry) =>
+      isRecord(entry) && entry.part === part && isString(entry.reason)
+        ? [{ part, reason: entry.reason }]
+        : [],
+    ),
+  );
 }
 
 export class RequestError extends Error {
@@ -781,7 +784,7 @@ export class Cookbook {
     return {
       id: row.id,
       ...(review ? { review } : {}),
-      ...((this.user.maintainer || row.author === this.user.id) && row.llm_warnings !== "[]"
+      ...(canReadReview && row.llm_warnings !== "[]"
         ? { llmWarnings: decodeLlmFindings(row.llm_warnings) }
         : {}),
       editVersion: row.edit_version,
@@ -809,7 +812,7 @@ export class Cookbook {
   }
 
   /**
-   * Run an advisory review on the specific stored edit open in a maintainer's browser.
+   * Recheck the stored edit and merge distinct findings into its saved advisory warnings.
    * @param input Slug, revision ID and edit version displayed in the viewer.
    * @param check Evaluate the retrieved files using the current instance policy.
    * @throws {RequestError} When access is denied, the revision is missing or its edit changes.
@@ -824,16 +827,28 @@ export class Cookbook {
       throw new RequestError(stale, 409);
     }
     const report = await check(this.user.id, recipe.files);
-    const current = await this.sql(
-      "SELECT 1 FROM revisions WHERE id = ? AND slug = ? AND edit_version = ? AND state != 'removed'",
-      revision,
-      recipe.slug,
-      version,
-    ).first();
+    const edit = "WHERE id = ? AND slug = ? AND edit_version = ? AND state != 'removed'";
+    const key = [revision, recipe.slug, version];
+    const statement = report.warnings.length
+      ? this.sql(
+          `UPDATE revisions SET llm_warnings = (
+             SELECT json_group_array(json_object('part', part, 'reason', reason)) FROM (
+               SELECT value ->> '$.part' AS part, value ->> '$.reason' AS reason
+               FROM json_each(revisions.llm_warnings)
+               UNION
+               SELECT value ->> '$.part', value ->> '$.reason' FROM json_each(?)
+               ORDER BY part, reason
+             )
+           ) ${edit} RETURNING llm_warnings`,
+          JSON.stringify(report.warnings),
+          ...key,
+        )
+      : this.sql(`SELECT llm_warnings FROM revisions ${edit}`, ...key);
+    const current = await statement.first<Pick<Revision, "llm_warnings">>();
     if (!current) {
       throw new RequestError(stale, 409);
     }
-    return report;
+    return { ...report, savedWarnings: decodeLlmFindings(current.llm_warnings) };
   }
 
   /**
@@ -1061,7 +1076,7 @@ export class Cookbook {
          SET title = ?, summary = ?, tags = ?, files = ?, file_names = ?, llm_warnings = ?, edit_version = edit_version + 1,
              state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?,
              documentation_hash = ?, instructions_hash = ?, fingerprints_ready = 1
-         WHERE id = ? AND slug = ? AND author = ? AND edit_version = ?
+         WHERE id = ? AND slug = ? AND author = ? AND edit_version = ? AND llm_warnings = ?
            AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL
            AND NOT EXISTS (${matchingSnapshot})`,
         payload.title,
@@ -1075,6 +1090,7 @@ export class Cookbook {
         slug,
         this.user.id,
         editVersion,
+        previous?.llm_warnings ?? "[]",
         ...match,
       ).run();
       if (!updated.meta.changes) {

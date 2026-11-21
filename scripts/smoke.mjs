@@ -4,6 +4,7 @@ import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
 import {
   recheckCriterion,
   reviewStoredFixture,
+  verifyDraftRecheck,
   verifyRevisionRecheck,
 } from "../tests/revision-recheck.mjs";
 import assert from "node:assert/strict";
@@ -1861,17 +1862,7 @@ describe("hasFields", () => {
   assert.equal(blockedResult.isError, true);
   assert.match(blockedResult.content[0].text, /LLM review blocked/u);
   assert.equal(llmReviewCalls, 3);
-  const draftCheck = await dispatch("/api/review/recheck", "maintainer", {
-    slug: reviewed.slug,
-    revision: reviewed.id,
-    editVersion: reviewed.editVersion,
-  });
-  assert.equal(draftCheck.status, 200);
-  assert.deepEqual((await draftCheck.json()).warnings, reviewed.llmWarnings);
-  assert.deepEqual(
-    await tool("get_recipe", { slug: reviewed.slug, revision: reviewed.id }, "maintainer"),
-    reviewed,
-  );
+  await verifyDraftRecheck(dispatch, tool, checkedRecipe, reviewed);
   await verifyRevisionRecheck(
     dispatch,
     { slug: "paging-fixture-26", revision: sampleIds.at(-1) },
