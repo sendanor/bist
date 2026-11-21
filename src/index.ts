@@ -219,7 +219,7 @@ export default {
           case "/api/search":
             return json(await cookbook.search(input));
           case "/api/recipe":
-            return json(await cookbook.get(input));
+            return json(await cookbook.get(input, input.reviewComments === "1"));
           case "/api/mine":
             return json(await cookbook.queue(true));
           case "/api/queue":
@@ -236,6 +236,9 @@ export default {
         if (url.pathname === "/api/submit") {
           const result = await cookbook.submit(await body(request));
           return json(result, result.editVersion > 0 ? 200 : 201);
+        }
+        if (url.pathname === "/api/comment") {
+          return json(await cookbook.comment(await body(request)), 201);
         }
         if (url.pathname === "/api/action") {
           return json(await cookbook.action(await body(request)));

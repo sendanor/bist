@@ -1368,3 +1368,79 @@ main,
   padding: 0;
   list-style: none;
 }
+
+.review-source {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.review-line {
+  display: grid;
+  grid-template-columns: minmax(3rem, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 8px;
+  padding: 2px 8px;
+}
+
+.review-line + .review-line {
+  border-top: 1px solid var(--line);
+}
+
+.review-line > code,
+.historical-line-comment > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.review-line-button,
+.review-line-number {
+  min-height: 30px;
+  justify-content: flex-end;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-line-button:hover,
+.review-line-button:focus-visible {
+  background: var(--paper);
+}
+
+.line-comment-thread {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.line-comment,
+.line-comment-form,
+.historical-line-comment {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.line-comment p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.line-comment-form textarea {
+  width: 100%;
+}
+
+.line-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.earlier-line-comments h4 {
+  margin-block: 16px 6px;
+}

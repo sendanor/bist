@@ -22,3 +22,8 @@ A recipe's test part can import `describe` and `it` from Node.js 24's built-in `
 Save the source as `source.ts` and the tests as `recipe.test.ts`, then run
 `node --test recipe.test.ts`. Bist type-checks the test and assertion APIs using the pinned
 Node declarations. Recipe tests run in the consumer's environment.
+
+Maintainers can open **Line comments** on any recipe part, including raw Markdown and agent
+instructions, and select a line number to leave feedback. Only the author and maintainers can
+read the feedback. When the author replaces a draft, earlier comments keep their original
+line numbers and excerpts under **Comments on earlier edits**.

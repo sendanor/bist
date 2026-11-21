@@ -1,7 +1,7 @@
 import { t } from "./localization.js";
 import { api } from "./browser-api.js";
 import cssLanguage from "highlight.js/lib/languages/css";
-import { diffLines } from "./line-diff.ts";
+import { diffLines, sourceLines } from "./line-diff.ts";
 import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import highlighter from "highlight.js/lib/core";
@@ -560,7 +560,156 @@ function labelFileTool(button, symbol, label) {
   button.title = label;
   button.replaceChildren(icon(symbol), el("span", { className: "file-tool-label" }, label));
 }
-function fileSection(key, value, previous, hasBase) {
+/**
+ * Open an inline composer anchored to the selected source line.
+ * @param comments Container that holds this line's feedback and composer.
+ * @param trigger Line number button used to open the composer.
+ * @param submit Callback that saves the comment and returns the stored row.
+ */
+function openLineComposer(comments, trigger, submit) {
+  const existing = comments.querySelector("form");
+  if (existing) {
+    existing.elements.body.focus();
+    return;
+  }
+  const input = el("textarea", {
+    name: "body",
+    maxlength: 2000,
+    rows: 3,
+    required: "",
+    "aria-label": t("review-comment"),
+  });
+  const notice = el("p", { className: "revision-action-error", role: "alert", hidden: "" });
+  const cancel = btn(t("cancel"), () => {
+    form.remove();
+    trigger.focus({ preventScroll: true });
+  });
+  const save = el("button", { type: "submit", className: "primary" }, t("add-comment"));
+  const form = el(
+    "form",
+    {
+      className: "line-comment-form",
+      onsubmit: async (event) => {
+        event.preventDefault();
+        const body = input.value.trim();
+        if (!body) {
+          input.value = "";
+          input.reportValidity();
+          return;
+        }
+        notice.hidden = true;
+        save.disabled = true;
+        cancel.disabled = true;
+        input.readOnly = true;
+        try {
+          const saved = await submit(body);
+          comments.insertBefore(lineCommentText(saved), form);
+          form.remove();
+          trigger.focus({ preventScroll: true });
+        } catch (error) {
+          notice.textContent = error.message;
+          notice.hidden = false;
+        } finally {
+          save.disabled = false;
+          cancel.disabled = false;
+          input.readOnly = false;
+        }
+      },
+    },
+    input,
+    notice,
+    el("div", { className: "line-comment-actions" }, cancel, save),
+  );
+  comments.append(form);
+  input.focus({ preventScroll: true });
+}
+
+/**
+ * Build a numbered source view for review, including raw Markdown and blank lines.
+ * @param recipe Revision being reviewed, including its current snapshot version.
+ * @param part File part whose source and comments will be displayed.
+ * @param value Stored file content for the selected part.
+ */
+function reviewLines(recipe, part, value) {
+  const current = new Map();
+  const earlier = [];
+  for (const comment of recipe.review.comments.filter((item) => item.part === part)) {
+    if (comment.editVersion === recipe.editVersion) {
+      const line = current.get(comment.line) ?? [];
+      line.push(comment);
+      current.set(comment.line, line);
+    } else {
+      earlier.push(comment);
+    }
+  }
+  const lines = value === undefined ? [] : sourceLines(value);
+  const rows = el("div", { className: "review-source", role: "group", "aria-label": parts[part] });
+  for (const [index, text] of lines.entries()) {
+    const line = index + 1;
+    const feedback = el(
+      "div",
+      { className: "line-comment-thread" },
+      ...(current.get(line) ?? []).map(lineCommentText),
+    );
+    const marker = recipe.review.canComment
+      ? btn(
+          String(line),
+          () =>
+            openLineComposer(feedback, marker, async (body) => {
+              const saved = await api("comment", {
+                slug: recipe.slug,
+                revision: recipe.id,
+                editVersion: recipe.editVersion,
+                part,
+                line,
+                body,
+              });
+              recipe.review.comments.push(saved);
+              return saved;
+            }),
+          "review-line-button",
+        )
+      : el("span", { className: "review-line-number" }, String(line));
+    if (recipe.review.canComment) {
+      const label = t("comment-on-line") + " " + line;
+      marker.setAttribute("aria-label", label);
+      marker.title = label;
+    }
+    rows.append(
+      el("div", { className: "review-line" }, marker, el("code", {}, text || " "), feedback),
+    );
+  }
+  return el(
+    "div",
+    {},
+    lines.length > 0 && rows,
+    earlier.length > 0 &&
+      el(
+        "section",
+        { className: "earlier-line-comments" },
+        el("h4", {}, t("comments-on-earlier-edits")),
+        ...earlier.map((comment) =>
+          el(
+            "div",
+            { className: "historical-line-comment" },
+            el("code", {}, t("line") + " " + comment.line + " · " + comment.excerpt),
+            lineCommentText(comment),
+          ),
+        ),
+      ),
+  );
+}
+
+function lineCommentText(comment) {
+  return el(
+    "div",
+    { className: "line-comment" },
+    el("strong", {}, t("reviewer")),
+    el("p", {}, comment.body),
+  );
+}
+
+function fileSection(recipe, key, value, previous, hasBase) {
   const name = parts[key];
   const prose = key === "documentation" || key === "instructions";
   const partIcon = {
@@ -579,6 +728,7 @@ function fileSection(key, value, previous, hasBase) {
   );
   const area = el("div", { id: "recipe-part-content-" + key });
   const status = el("span", { className: "copy-status", role: "status" });
+  let reviewing = false;
   let comparing = false;
   let wrap = true;
   let renderedLines;
@@ -586,6 +736,15 @@ function fileSection(key, value, previous, hasBase) {
     hasBase &&
     btn(t("show-changes"), () => {
       comparing = !comparing;
+      reviewing = false;
+      renderPart();
+    });
+  const hasFeedback = recipe.review?.comments.some((comment) => comment.part === key);
+  const reviewButton =
+    (hasFeedback || (recipe.review?.canComment && value !== undefined)) &&
+    btn(t("line-comments"), () => {
+      reviewing = !reviewing;
+      comparing = false;
       renderPart();
     });
   const wrapButton = btn(t("wrap-lines"), () => {
@@ -608,29 +767,35 @@ function fileSection(key, value, previous, hasBase) {
       labelFileTool(compare, "diff", comparing ? t("show-file") : t("show-changes"));
       compare.setAttribute("aria-pressed", String(comparing));
     }
-    wrapButton.hidden = !comparing && (prose || value === undefined);
+    if (reviewButton) {
+      labelFileTool(reviewButton, "comment", reviewing ? t("show-file") : t("line-comments"));
+      reviewButton.setAttribute("aria-pressed", String(reviewing));
+    }
+    wrapButton.hidden = reviewing || (!comparing && (prose || value === undefined));
     wrapButton.setAttribute("aria-pressed", String(wrap));
-    copy.hidden = value === undefined || comparing;
-    const content = comparing
-      ? diff(previous, value, wrap)
-      : value === undefined
-        ? el("p", { className: "file-empty" }, t("this-revision-omits-this-file"))
-        : prose
-          ? readableMarkdown(value)
-          : codeBox(
-              (renderedLines ??= highlightedLines(
-                value,
-                key === "styles" ? "css" : "typescript",
-              )).map(({ value: line, marker }) => ({
-                value: line.nodeType ? line.cloneNode(true) : line,
-                marker,
-              })),
-              wrap,
-              name,
-            );
+    copy.hidden = value === undefined || comparing || reviewing;
+    const content = reviewing
+      ? reviewLines(recipe, key, value)
+      : comparing
+        ? diff(previous, value, wrap)
+        : value === undefined
+          ? el("p", { className: "file-empty" }, t("this-revision-omits-this-file"))
+          : prose
+            ? readableMarkdown(value)
+            : codeBox(
+                (renderedLines ??= highlightedLines(
+                  value,
+                  key === "styles" ? "css" : "typescript",
+                )).map(({ value: line, marker }) => ({
+                  value: line.nodeType ? line.cloneNode(true) : line,
+                  marker,
+                })),
+                wrap,
+                name,
+              );
     area.replaceChildren(content);
   }
-  for (const control of [compare, wrapButton].filter(Boolean)) {
+  for (const control of [compare, reviewButton, wrapButton].filter(Boolean)) {
     control.setAttribute("aria-controls", area.id);
   }
   renderPart();
@@ -640,17 +805,20 @@ function fileSection(key, value, previous, hasBase) {
       "section",
       { className: "panel recipe-part", "aria-labelledby": heading.id },
       heading,
-      el("div", { className: "file-tools" }, compare, wrapButton, copy, status),
+      el("div", { className: "file-tools" }, compare, reviewButton, wrapButton, copy, status),
       area,
     ),
   };
 }
 function fileViewer(recipe, base) {
   const keys = Object.keys(parts).filter(
-    (key) => key in recipe.files || (base && key in base.files),
+    (key) =>
+      key in recipe.files ||
+      (base && key in base.files) ||
+      recipe.review?.comments.some((comment) => comment.part === key),
   );
   const files = keys.map((key) =>
-    fileSection(key, recipe.files[key], base?.files[key], Boolean(base)),
+    fileSection(recipe, key, recipe.files[key], base?.files[key], Boolean(base)),
   );
   const navigate = el(
     "nav",
@@ -885,7 +1053,9 @@ function revisionControls(recipe, section) {
   return wrapper;
 }
 async function recipePage(section, slug, revision) {
-  const recipe = await api("recipe?" + new URLSearchParams({ slug, revision }));
+  const recipe = await api(
+    "recipe?" + new URLSearchParams({ slug, revision, reviewComments: "1" }),
+  );
   let base = null;
   if (recipe.base) {
     try {

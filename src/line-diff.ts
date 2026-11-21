@@ -52,3 +52,11 @@ export function diffLines(before: string, after: string, maxCells = 250_000): Di
   }
   return rows;
 }
+
+/**
+ * Split a stored file into the lines shown in the review gutter.
+ * @param text File text in any supported line-ending format.
+ */
+export function sourceLines(text: string): string[] {
+  return text.replace(/(?:\r\n|\r|\n)$/u, "").split(/\r\n|\r|\n/u);
+}

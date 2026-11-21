@@ -79,6 +79,7 @@ try {
     "0003_recipe_fingerprints",
     "0004_prose_recipes",
     "0005_prose_fingerprints",
+    "0006_revision_line_comments",
   ]) {
     const migration = await readFile("drizzle/" + name + ".sql", "utf8");
     await db.batch(
@@ -510,9 +511,48 @@ describe("hasFields", () => {
   const draft = await tool("submit_recipe", {
     ...payload,
     slug: "editable-draft",
-    files: { source: "export const value = 1;" },
+    files: {
+      source: "export const value = 1;",
+      documentation: "# Review notes\n\nPrefer a stable boundary.",
+    },
   });
   const draftRef = { slug: draft.slug, revision: draft.id };
+  const reviewPath = "/api/recipe?" + new URLSearchParams({ ...draftRef, reviewComments: "1" });
+  const feedback = {
+    ...draftRef,
+    editVersion: 0,
+    part: "documentation",
+    line: 3,
+    body: "Explain the <boundary>.",
+  };
+  assert.equal((await dispatch("/api/comment", "author", feedback)).status, 403);
+  assert.equal(
+    (await dispatch("/api/comment", "maintainer", { ...feedback, line: 4 })).status,
+    400,
+  );
+  assert.equal(
+    (await dispatch("/api/comment", "maintainer", { ...feedback, part: "tests" })).status,
+    400,
+  );
+  const posted = await dispatch("/api/comment", "maintainer", feedback);
+  assert.equal(posted.status, 201);
+  const note = await posted.json();
+  assert.equal(note.excerpt, "Prefer a stable boundary.");
+  assert.equal(note.body, feedback.body);
+  const blank = await dispatch("/api/comment", "maintainer", { ...feedback, line: 2 });
+  assert.equal(blank.status, 201);
+  assert.equal((await blank.json()).excerpt, "");
+  const sourceComment = await dispatch("/api/comment", "maintainer", {
+    ...feedback,
+    part: "source",
+    line: 1,
+  });
+  assert.equal(sourceComment.status, 201);
+  assert.match((await sourceComment.json()).excerpt, /value = 1/);
+  const authorReview = (await (await dispatch(reviewPath, "author")).json()).review;
+  assert.equal(authorReview.canComment, false);
+  assert.ok(authorReview.comments.some(({ id }) => id === note.id));
+  assert.equal((await dispatch(reviewPath, "reader")).status, 404);
   const replace = {
     ...payload,
     slug: draft.slug,
@@ -546,6 +586,12 @@ describe("hasFields", () => {
   const saved = await tool("submit_recipe", replace);
   assert.equal(saved.id, draft.id);
   assert.equal(saved.editVersion, 1);
+  assert.equal((await dispatch("/api/comment", "maintainer", feedback)).status, 409);
+  const oldFeedback = (await (await dispatch(reviewPath, "author")).json()).review.comments;
+  assert.deepEqual(
+    oldFeedback.find(({ id }) => id === note.id),
+    note,
+  );
   assert.equal(
     (await tool("my_revisions", {})).filter(({ slug }) => slug === draft.slug).length,
     1,
@@ -589,9 +635,28 @@ describe("hasFields", () => {
       reason: "Duplicate revision.",
     });
   assert.notEqual(duplicate.id, draft.id);
+  assert.equal(
+    (
+      await dispatch("/api/comment", "maintainer", {
+        ...feedback,
+        ...duplicateRef,
+        editVersion: duplicate.editVersion,
+        part: "source",
+        line: 1,
+      })
+    ).status,
+    201,
+  );
   assert.equal((await duplicateAction("maintainer", "request_changes")).status, 200);
   assert.equal((await duplicateAction("reader", "remove_draft")).status, 409);
   assert.equal((await duplicateAction("author", "remove_draft")).status, 200);
+  assert.equal(
+    await db
+      .prepare("SELECT id FROM revision_line_comments WHERE revision = ?")
+      .bind(duplicate.id)
+      .first(),
+    null,
+  );
   assert.equal(
     (await dispatch("/api/recipe?" + new URLSearchParams(duplicateRef), "author")).status,
     404,
@@ -613,6 +678,20 @@ describe("hasFields", () => {
   assert.equal((await action("approve")).status, 200);
   assert.deepEqual(await tool("search_recipes", {}, "reader"), []);
   assert.equal((await action("publish")).status, 200);
+  const publishedFeedback = await dispatch("/api/comment", "maintainer", {
+    ...feedback,
+    ...revision,
+    editVersion: submitted.editVersion,
+    line: 1,
+  });
+  assert.equal(publishedFeedback.status, 201);
+  const publicReviewPath =
+    "/api/recipe?" + new URLSearchParams({ ...revision, reviewComments: "1" });
+  assert.equal((await (await dispatch(publicReviewPath, "reader")).json()).review, undefined);
+  assert.equal(
+    (await (await dispatch(publicReviewPath, "author")).json()).review.comments.length,
+    1,
+  );
   const persistedPolicy = {
     ...settings.policy,
     quality: { ...settings.policy.quality, cssClasses: "warn" },

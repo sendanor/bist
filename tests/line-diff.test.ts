@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { diffLines } from "../src/line-diff.ts";
+import { diffLines, sourceLines } from "../src/line-diff.ts";
 
 assert.deepEqual(diffLines("a\nold\nkeep\nend", "a\nnew\nkeep\nplus\nend"), [
   { before: "a", after: "a" },
@@ -17,3 +17,5 @@ assert.deepEqual(fallback, [
   { before: "z", after: "z" },
 ]);
 assert.deepEqual(diffLines("", ""), [{ before: "", after: "" }]);
+assert.deepEqual(sourceLines("first\r\n\r\nlast\r\n"), ["first", "", "last"]);
+assert.deepEqual(sourceLines("first\rlast"), ["first", "last"]);

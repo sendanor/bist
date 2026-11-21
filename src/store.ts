@@ -7,6 +7,7 @@ import {
   validateCodePolicy,
 } from "./code-policy";
 import { normalizeFiles, parts } from "./format";
+import { sourceLines } from "./line-diff";
 import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
 export interface Statement {
   bind(...values: unknown[]): Statement;
@@ -44,6 +45,16 @@ interface LegacySnapshot {
   readonly id: string;
   readonly files: string;
   readonly edit_version: number;
+}
+
+/** Private review feedback anchored to a line of a specific saved edit. */
+interface LineComment {
+  readonly id: number;
+  readonly editVersion: number;
+  readonly part: string;
+  readonly line: number;
+  readonly excerpt: string;
+  readonly body: string;
 }
 
 const visibleDuplicate = `
@@ -312,7 +323,7 @@ export class Cookbook {
     ).all<Revision>();
     return rows.results.map(clean);
   }
-  async get(input: Input) {
+  async get(input: Input, includeReview = false) {
     const slug = str(input.slug, "recipe slug", 64);
     const id = revisionId(input.revision, "revision ID", true);
     const selected = input.parts ?? parts;
@@ -337,8 +348,25 @@ export class Cookbook {
       row.author === this.user.id &&
       !row.published_at &&
       (row.state === "pending" || row.state === "changes");
+    const canReadReview = this.user.maintainer || row.author === this.user.id;
+    const review =
+      includeReview && canReadReview
+        ? {
+            canComment: this.user.maintainer,
+            comments: (
+              await this.sql(
+                `SELECT id, edit_version AS editVersion, part, line, excerpt, body
+             FROM revision_line_comments WHERE revision = ? AND edit_version <= ?
+             ORDER BY edit_version DESC, part, line, id`,
+                row.id,
+                row.edit_version,
+              ).all<LineComment>()
+            ).results,
+          }
+        : undefined;
     return {
       id: row.id,
+      ...(review ? { review } : {}),
       editVersion: row.edit_version,
       slug: row.slug,
       title: row.title,
@@ -356,6 +384,62 @@ export class Cookbook {
       canRequestRemoval: row.author === this.user.id || this.user.maintainer,
       files: decodeFiles(row.files, selected),
     };
+  }
+  /**
+   * Save a maintainer's private feedback against an exact line of the current edit.
+   * @param input Revision ID, slug, edit version, part, one-based line and comment body.
+   * @throws {RequestError} When the caller lacks access, the line is invalid, or the edit has changed.
+   */
+  async comment(input: Input) {
+    this.maintainer();
+    const slug = str(input.slug, "recipe slug", 64);
+    const id = revisionId(input.revision, "revision ID");
+    const version = snapshotVersion(input.editVersion);
+    const { part, line } = input;
+    if (
+      !isRecipePart(part) ||
+      typeof line !== "number" ||
+      !Number.isSafeInteger(line) ||
+      line < 1
+    ) {
+      throw new RequestError("Choose a valid file part and line number.");
+    }
+    const body = str(input.body, "a comment", 2000);
+    const row = await this.sql(
+      "SELECT files, edit_version FROM revisions WHERE id = ? AND slug = ? AND state != 'removed'",
+      id,
+      slug,
+    ).first<Pick<Revision, "files" | "edit_version">>();
+    if (!row) {
+      throw new RequestError("Recipe revision not found.", 404);
+    }
+    const stale = "This revision changed. Reload it before adding a line comment.";
+    if (row.edit_version !== version) {
+      throw new RequestError(stale, 409);
+    }
+    const file = decodeFiles(row.files, [part])[part];
+    const excerpt = file === undefined ? undefined : sourceLines(file)[line - 1];
+    if (excerpt === undefined) {
+      throw new RequestError("This line does not exist in the selected file part.");
+    }
+    const saved = await this.sql(
+      `INSERT INTO revision_line_comments (revision, edit_version, part, line, excerpt, body, reviewer)
+       SELECT id, edit_version, ?, ?, ?, ?, ? FROM revisions
+       WHERE id = ? AND slug = ? AND edit_version = ? AND state != 'removed'
+       RETURNING id, edit_version AS editVersion, part, line, excerpt, body`,
+      part,
+      line,
+      excerpt,
+      body,
+      this.user.id,
+      id,
+      slug,
+      version,
+    ).first<LineComment>();
+    if (!saved) {
+      throw new RequestError(stale, 409);
+    }
+    return saved;
   }
   private async normalizeSubmission(files: unknown, policy: typeof defaultCodePolicy) {
     try {

@@ -43,6 +43,13 @@
       "when": 1795219200005,
       "tag": "0005_prose_fingerprints",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795219200006,
+      "tag": "0006_revision_line_comments",
+      "breakpoints": true
     }
   ]
 }
