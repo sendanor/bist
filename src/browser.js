@@ -17,13 +17,16 @@ const toolbar = document.querySelector("#revision-toolbar");
 const topBar = toolbar.closest("header");
 const locationLabel = document.querySelector("#location");
 const revisionBack = document.querySelector("#revision-back");
+const assistantToggle = document.querySelector("#assistant-toggle");
+const assistantPanel = document.querySelector("#assistant-panel");
+const assistantView = document.querySelector("#assistant-view");
+const assistantClose = document.querySelector("#assistant-close");
 const labels = {
   library: t("recipe-library"),
   contribute: t("contribute"),
   mine: t("my-revisions"),
   review: t("review-queue"),
   settings: t("settings"),
-  assistant: t("assistant"),
 };
 const parts = {
   documentation: t("documentation"),
@@ -36,6 +39,10 @@ const parts = {
 const responseSkillLabels = {
   caveman: t("assistant-skill-caveman"),
   suomenkieli: t("assistant-skill-finnish"),
+  seo: t("assistant-skill-seo"),
+  design: t("assistant-skill-design"),
+  import: t("assistant-skill-import"),
+  publication: t("assistant-skill-publication"),
 };
 const stateLabels = {
   pending: t("pending-review"),
@@ -47,6 +54,7 @@ const stateLabels = {
 let maintainer = false;
 let renderId = 0;
 let recentRecipe;
+let assistantLoading = false;
 const listingPaths = new Map();
 
 /**
@@ -2050,13 +2058,26 @@ async function codePolicyPage() {
   return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
 }
 
-/** Build the maintainer's published-recipe assistant and its model access check. */
-async function assistantPage() {
+/**
+ * Refresh the skill choices while retaining a selected skill that is still available.
+ * @param select The Assistant's response skill control.
+ * @param skills Identifiers currently allowed by the maintainer.
+ */
+function updateResponseSkills(select, skills) {
+  const current = select.value;
+  select.replaceChildren(
+    el("option", { value: "" }, t("assistant-skill-default")),
+    ...skills.map((id) => el("option", { value: id }, responseSkillLabels[id])),
+  );
+  select.value = skills.includes(current) ? current : "";
+  select.closest("label").hidden = !skills.length;
+}
+
+/** Build the persistent Assistant panel content and its model access check. */
+async function assistantContent() {
   const { configured, model, docsSearch, context7Search, skills } = await api("assistant");
-  const heading = title(t("assistant"), t("assistant-description"));
   if (!configured) {
     return [
-      heading,
       el(
         "div",
         { className: "panel" },
@@ -2089,8 +2110,11 @@ async function assistantPage() {
   });
   const result = el("div", { "aria-live": "polite" });
   const ask = el("button", { className: "primary" }, t("assistant-ask"));
+  const skillSelect = el("select", { name: "skill" });
+  const skillField = el("label", {}, t("assistant-skill"), skillSelect);
+  updateResponseSkills(skillSelect, skills);
   return [
-    heading,
+    el("p", { className: "muted" }, t("assistant-description")),
     el("div", { className: "actions" }, el("code", {}, model), check),
     modelStatus,
     el(
@@ -2148,18 +2172,7 @@ async function assistantPage() {
         "",
         true,
       ),
-      skills.length > 0 &&
-        el(
-          "label",
-          {},
-          t("assistant-skill"),
-          el(
-            "select",
-            { name: "skill" },
-            el("option", { value: "" }, t("assistant-skill-default")),
-            ...skills.map((id) => el("option", { value: id }, responseSkillLabels[id])),
-          ),
-        ),
+      skillField,
       (docsSearch || context7Search) &&
         field("docsQuery", t("assistant-docs-query"), {
           maxlength: 160,
@@ -2177,6 +2190,40 @@ async function assistantPage() {
     ),
     result,
   ];
+}
+
+/** Close the Assistant while keeping its current draft and answer available. */
+function closeAssistant() {
+  assistantPanel.hidden = true;
+  assistantToggle.setAttribute("aria-expanded", "false");
+  assistantToggle.focus();
+}
+
+/** Open the Assistant beside the current page, loading its form on first use. */
+async function openAssistant() {
+  assistantPanel.hidden = false;
+  assistantToggle.setAttribute("aria-expanded", "true");
+  assistantClose.focus();
+  const question = assistantView.querySelector('[name="question"]');
+  if (question || assistantLoading) {
+    question?.focus();
+    return;
+  }
+  assistantLoading = true;
+  assistantView.replaceChildren(el("p", { role: "status" }, t("assistant-loading")));
+  try {
+    assistantView.replaceChildren(...(await assistantContent()).filter(Boolean));
+    if (!assistantPanel.hidden && assistantPanel.contains(document.activeElement)) {
+      assistantView.querySelector('[name="question"]')?.focus();
+    }
+  } catch (error) {
+    assistantView.replaceChildren(
+      el("p", { role: "status" }, error.message),
+      btn(t("retry"), openAssistant),
+    );
+  } finally {
+    assistantLoading = false;
+  }
 }
 
 /** Build the maintainer controls and a read-only check for Bist's MCP tool list. */
@@ -2327,7 +2374,11 @@ async function responseSkillsForm() {
         save.disabled = true;
         status.textContent = "";
         try {
-          await api("settings/mcp/skills", { enabled: selection });
+          const { enabled: available } = await api("settings/mcp/skills", { enabled: selection });
+          const select = assistantView.querySelector('[name="skill"]');
+          if (select) {
+            updateResponseSkills(select, available);
+          }
           status.textContent = t("mcp-skills-saved");
         } catch (error) {
           status.textContent = error.message;
@@ -2392,6 +2443,12 @@ async function settingsPage(page) {
 
 /** Render the current page path and discard stale asynchronous results. */
 async function render() {
+  if (location.pathname === "/assistant") {
+    history.replaceState(history.state, "", "/library" + location.search);
+    if (maintainer) {
+      void openAssistant();
+    }
+  }
   const current = ++renderId;
   toolbar.replaceChildren();
   const { page, section, slug, revision } = parsePagePath(location.pathname);
@@ -2432,8 +2489,6 @@ async function render() {
       view = await contribute();
     } else if (section === "settings") {
       view = await settingsPage(page);
-    } else if (section === "assistant") {
-      view = await assistantPage();
     } else {
       view = await listingPage(section);
       if (current === renderId) {
@@ -2499,9 +2554,24 @@ function navigate(path) {
 upgradeLegacyRoute();
 try {
   ({ maintainer } = await api("session"));
-  for (const route of ["review", "settings", "assistant"]) {
+  for (const route of ["review", "settings"]) {
     document.querySelector(`.rail nav a[href="/${route}"]`).hidden = !maintainer;
   }
+  assistantToggle.hidden = !maintainer;
+  assistantToggle.addEventListener("click", () => {
+    if (assistantPanel.hidden) {
+      void openAssistant();
+    } else {
+      closeAssistant();
+    }
+  });
+  assistantClose.addEventListener("click", closeAssistant);
+  assistantPanel.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !event.defaultPrevented) {
+      event.preventDefault();
+      closeAssistant();
+    }
+  });
   document.addEventListener("click", (event) => {
     if (
       event.defaultPrevented ||

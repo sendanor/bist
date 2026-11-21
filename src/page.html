@@ -194,17 +194,6 @@
             >{{t:review-queue}}</a
           >
           <a
-            href="/assistant"
-            hidden
-            ><svg
-              class="ui-icon"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <use href="#icon-terminal" /></svg
-            >{{t:assistant}}</a
-          >
-          <a
             href="/settings"
             hidden
             ><svg
@@ -249,6 +238,15 @@
           </div>
           <div class="top-actions">
             <div id="revision-toolbar"></div>
+            <button
+              type="button"
+              id="assistant-toggle"
+              aria-controls="assistant-panel"
+              aria-expanded="false"
+              hidden
+            >
+              {{t:assistant}}
+            </button>
             <a
               href="/contribute"
               class="button primary top-new-recipe"
@@ -275,6 +273,22 @@
         >
           <p class="muted">{{t:loading-cookbook}}</p>
         </div>
+        <aside
+          id="assistant-panel"
+          aria-labelledby="assistant-panel-title"
+          hidden
+        >
+          <div class="assistant-panel-header">
+            <h2 id="assistant-panel-title">{{t:assistant}}</h2>
+            <button
+              type="button"
+              id="assistant-close"
+            >
+              {{t:assistant-close}}
+            </button>
+          </div>
+          <div id="assistant-view"></div>
+        </aside>
       </main>
     </div>
   </body>

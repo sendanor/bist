@@ -1019,7 +1019,8 @@ main,
     min-height: 44px;
   }
 
-  .top:not(.recipe-top) {
+  .top:not(.recipe-top):has(#assistant-toggle[hidden]),
+  .top:not(.recipe-top) .top-new-recipe {
     display: none;
   }
 
@@ -1481,6 +1482,33 @@ main,
 .assistant-answer {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+#assistant-panel {
+  position: fixed;
+  z-index: 8;
+  inset: var(--top-height) 0 0 auto;
+  width: min(100%, 31rem);
+  padding: clamp(14px, 3vw, 24px);
+  overflow: auto;
+  background: var(--surface);
+  border-inline-start: 1px solid var(--line);
+  box-shadow: 0 8px 28px rgb(28 26 56 / 18%);
+}
+
+.assistant-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-panel-header h2 {
+  margin: 0;
+}
+
+#assistant-toggle[aria-expanded="true"] {
+  background: var(--paper);
 }
 
 .rule-matches {

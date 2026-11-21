@@ -152,7 +152,10 @@ async function responseItems(
       (config.searchDocs
         ? " Use the documentation tool for the public search terms the maintainer supplied. If the lookup fails, report that the documentation could not be checked."
         : "") +
-      (config.skill ? "\n" + config.skill : ""),
+      (config.skill
+        ? "\nApply the selected skill using the current conversation and available tools. Bist provides read-only lookups. State which checks or actions require access that you do not have.\n\n" +
+          config.skill
+        : ""),
     input,
     tools: config.searchDocs ? [...tools, config.context7 ? context7Tool : docsTool] : tools,
   });

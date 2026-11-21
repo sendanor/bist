@@ -68,22 +68,6 @@ In **Assistant**, enter public search terms and an exact library ID such as
 `/react/react`. Bist sends those two fields to Context7. Leave the library ID blank
 to use the OpenAI Docs connection, if enabled. [Context7 MCP tools](https://context7.com/docs/resources/all-clients)
 
-## Use agent skills
-
-In **Settings → MCP → Assistant response skills**, maintainers choose which built-in
-skills the Assistant offers on this instance. Both are available by default and the
-Assistant applies a skill only when selected for a question. An empty saved selection
-hides the selector.
-
-Choose **Caveman** or **Suomen kieli** in the Assistant's **Response skill** field
-to apply the writing guidance to that answer. The library also offers both skills
-as downloads. On a published recipe, **Download SKILL.md** exports its agent instructions
-with skill metadata. If the recipe has only documentation, the export uses that text.
-
-Review the file before installing it. For project-scoped Codex use, save it as
-`.agents/skills/<skill-name>/SKILL.md`, using the manifest's `name` for the folder,
-then start a new Codex session. [Codex skill installation](https://developers.openai.com/api/reference/cli)
-
 - `search_recipes` finds published recipe summaries by keyword and tag. Listing tools accept
   `tags` as an array of exact tags that must all match, alongside the optional `query`.
 - `get_recipe` takes a slug and can retrieve selected parts. It defaults to the current
@@ -111,6 +95,26 @@ Maintainers can disable, warn on, or block duplicates. Retry with `allowDuplicat
 only to acknowledge a duplicate warning. Older revisions are indexed in batches, so you
 may be asked to retry a submission while that work finishes. See the
 [quality policy](../QUALITY.md) for other checks.
+
+## Use agent skills
+
+In **Settings → MCP → Assistant response skills**, maintainers choose which built-in
+skills the Assistant offers on this instance. The Assistant applies a skill only when
+selected for a question. Caveman and Suomen kieli are available by default. Maintainers can also enable the CMS skills for SEO and social
+previews, layout, importing source material, and checking drafts before publication.
+An empty saved selection hides the selector.
+
+Open **Assistant** from the top bar on any page. Its current question and answer stay in
+the panel while you navigate. CMS skills use the information and tools available in Bist.
+
+Choose a skill from the Assistant's **Response skill** field to apply its guidance to
+that answer. The library also offers Caveman and Suomen kieli
+as downloads. On a published recipe, **Download SKILL.md** exports its agent instructions
+with skill metadata. If the recipe has only documentation, the export uses that text.
+
+Review the file before installing it. For project-scoped Codex use, save it as
+`.agents/skills/<skill-name>/SKILL.md`, using the manifest's `name` for the folder,
+then start a new Codex session. [Codex skill installation](https://developers.openai.com/api/reference/cli)
 
 ## Run a recipe's tests
 

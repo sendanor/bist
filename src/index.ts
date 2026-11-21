@@ -28,6 +28,10 @@ import css from "./styles.css";
 import browser from "cookbook:browser";
 import caveman from "./skills/caveman/SKILL.md";
 import suomenkieli from "./skills/suomenkieli/SKILL.md";
+import seo from "./skills/seo/SKILL.md";
+import design from "./skills/design/SKILL.md";
+import importSkill from "./skills/import/SKILL.md";
+import publication from "./skills/publication/SKILL.md";
 
 interface Env {
   DB: Database;
@@ -48,8 +52,13 @@ const skillsSettingsPath = mcpSettingsPath + "/skills";
 const skills = new Map([
   ["caveman", caveman],
   ["suomenkieli", suomenkieli],
+  ["seo", seo],
+  ["design", design],
+  ["import", importSkill],
+  ["publication", publication],
 ]);
 const skillNames = [...skills.keys()];
+const defaultSkills = ["caveman", "suomenkieli"];
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -437,7 +446,7 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   if (skillName && !skill) {
     throw new RequestError("Choose a supported skill.");
   }
-  if (skillName && !(await enabledSkills(env.DB, skillNames)).includes(skillName)) {
+  if (skillName && !(await enabledSkills(env.DB, skillNames, defaultSkills)).includes(skillName)) {
     throw new RequestError("This response skill is disabled.", 403);
   }
   const context7 = Boolean(libraryId);
@@ -479,7 +488,12 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
     return { hits };
   }
   const answer = await runOpenAiAssistant(
-    { ...config, context7, skill, searchDocs: docsQuery ? searchDocs : undefined },
+    {
+      ...config,
+      context7,
+      skill: skill?.slice(skill.indexOf("\n---\n\n", 4) + 6),
+      searchDocs: docsQuery ? searchDocs : undefined,
+    },
     question,
     async (name, value) => {
       if (name === "search_recipes") {
@@ -570,7 +584,7 @@ export default {
               configured,
               docsSearch: await docsMcpEnabled(env.DB),
               context7Search: await docsMcpEnabled(env.DB, true),
-              skills: await enabledSkills(env.DB, skillNames),
+              skills: await enabledSkills(env.DB, skillNames, defaultSkills),
             });
           }
           case "/api/settings/openai":
@@ -584,7 +598,10 @@ export default {
           case context7Path:
             return json({ enabled: await docsMcpEnabled(env.DB, true) });
           case skillsSettingsPath:
-            return json({ enabled: await enabledSkills(env.DB, skillNames), skills: skillNames });
+            return json({
+              enabled: await enabledSkills(env.DB, skillNames, defaultSkills),
+              skills: skillNames,
+            });
           case "/api/skill":
             return await downloadSkill(input, cookbook);
           case "/api/assistant/models": {

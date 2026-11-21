@@ -158,9 +158,10 @@ try {
   const context7Path = mcpPath + "/context7";
   const skillsPath = mcpPath + "/skills";
   const builtInSkills = ["caveman", "suomenkieli"];
+  const skillCatalog = [...builtInSkills, "seo", "design", "import", "publication"];
   assert.deepEqual(await (await dispatch(skillsPath, "maintainer")).json(), {
     enabled: builtInSkills,
-    skills: builtInSkills,
+    skills: skillCatalog,
   });
   assert.equal((await dispatch(skillsPath, "author")).status, 403);
   assert.equal((await dispatch(skillsPath, "author", { enabled: [] })).status, 403);
@@ -172,13 +173,22 @@ try {
   assert.equal((await dispatch(skillsPath, "maintainer", { enabled: [] })).status, 200);
   assert.deepEqual(await (await dispatch(skillsPath, "maintainer")).json(), {
     enabled: [],
-    skills: builtInSkills,
+    skills: skillCatalog,
   });
   assert.equal(
     (await dispatch("/api/assistant", "maintainer", { question: "Briefly.", skill: "caveman" }))
       .status,
     403,
   );
+  assert.equal((await dispatch(skillsPath, "maintainer", { enabled: builtInSkills })).status, 200);
+  assert.equal(
+    (await dispatch(skillsPath, "maintainer", { enabled: ["publication"] })).status,
+    200,
+  );
+  assert.deepEqual(await (await dispatch(skillsPath, "maintainer")).json(), {
+    enabled: ["publication"],
+    skills: skillCatalog,
+  });
   assert.equal((await dispatch(skillsPath, "maintainer", { enabled: builtInSkills })).status, 200);
   const finnishSkill = await dispatch("/api/skill?name=suomenkieli", "author");
   assert.equal(finnishSkill.headers.get("content-disposition"), 'attachment; filename="SKILL.md"');
@@ -427,6 +437,8 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   assert.match(shell, /recipes and guides/);
   assert.doesNotMatch(shell, /\{\{t:/);
   assert.match(shell, /href="\/review"/);
+  assert.match(shell, /aria-controls="assistant-panel"/);
+  assert.doesNotMatch(shell, /href="\/assistant"/);
   assert.doesNotMatch(shell, /href="#(?:library|contribute|mine|review|settings)"/);
   const routeRevision = "00000000-0000-4000-8000-000000000001";
   for (const path of [
@@ -1425,7 +1437,7 @@ describe("hasFields", () => {
       assert.equal(body.store, false);
       assert.equal(body.parallel_tool_calls, false);
       if (body.tools.some(({ name }) => name === "query_context7_docs")) {
-        assert.match(body.instructions, /# Suomen kieli/u);
+        assert.match(body.instructions, /Use clear standard Finnish\./u);
         const last = body.input.at(-1);
         const item =
           last.role === "user"

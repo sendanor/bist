@@ -101,13 +101,18 @@ export async function saveDocsMcp(db: Database, input: Input, context7 = false) 
  * Read the instance's available response skills, retaining an explicitly empty selection.
  * @param db The instance database binding.
  * @param builtIn Names of skills included in this version.
+ * @param defaults The available skills when the instance has no saved selection.
  */
-export async function enabledSkills(db: Database, builtIn: readonly string[]) {
+export async function enabledSkills(
+  db: Database,
+  builtIn: readonly string[],
+  defaults: readonly string[],
+) {
   const row = await db
     .prepare("SELECT enabled FROM assistant_skill_settings WHERE id = 1")
     .first<{ enabled: string }>();
   if (!row) {
-    return builtIn;
+    return defaults;
   }
   const selection = JSON.parse(row.enabled);
   return isArray(selection) ? builtIn.filter((id) => selection.includes(id)) : [];

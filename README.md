@@ -93,7 +93,8 @@ settings and credentials outside the public repository.
 
 ### OpenAI assistant
 
-The optional **Assistant** page lets maintainers ask questions about published recipes.
+The optional **Assistant** tool in the top bar lets maintainers ask questions about
+published recipes while browsing the app.
 Set a randomly generated 32-byte key, encoded as 64 hexadecimal characters, as the
 `SETTINGS_ENCRYPTION_KEY` deployment secret. Keep a secure copy separate from D1 backups.
 In **Settings → OpenAI**, save a restricted OpenAI project API key with **List models
@@ -103,7 +104,7 @@ separately. Bist stores the API key encrypted in D1 and shows only
 whether a key is configured. Maintainers can update the model or replace or remove the API key
 without redeploying. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
 
-Use **Assistant → Check model access** to check whether the model appears in the key's
+Open **Assistant** and select **Check model access** to see whether the model appears in the key's
 catalog, then ask a question to verify inference and tool support. If upgrading from an
 environment-configured release, enter the model and credential in Bist Settings and remove
 the old `OPENAI_API_KEY` and `OPENAI_MODEL` deployment values. If the deployment encryption
