@@ -2,7 +2,7 @@ import { isRevisionId } from "./guards.ts";
 
 const sections = new Set(["library", "contribute", "mine", "review", "settings", "assistant"]);
 const recipeSections = new Set(["library", "mine", "review"]);
-const settingsPages = new Set(["openai", "code-policy"]);
+const settingsPages = new Set(["openai", "code-policy", "mcp"]);
 
 /**
  * Match a browser pathname against the application routes shared by the shell and the Worker.

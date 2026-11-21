@@ -138,6 +138,7 @@ try {
     secretsMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
   );
   await db.prepare(await readFile("drizzle/0010_recipe_file_names.sql", "utf8")).run();
+  await db.prepare(await readFile("drizzle/0011_mcp_settings.sql", "utf8")).run();
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -149,6 +150,57 @@ try {
     .run();
 
   assert.equal((await dispatch("/api/search", null)).status, 401);
+  const mcpPath = "/api/settings/mcp";
+  const mcpSettings = await (await dispatch(mcpPath, "maintainer")).json();
+  const mcpSelection = { enabled: true, enabledTools: ["search_recipes"] };
+  const listMcp = { jsonrpc: "2.0", id: 1, method: "tools/list" };
+  const readMcp = {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "get_recipe", arguments: { slug: "example" } },
+  };
+  assert.equal((await dispatch(mcpPath, null)).status, 401);
+  assert.equal((await dispatch(mcpPath, "author")).status, 403);
+  assert.equal((await dispatch(mcpPath, "author", mcpSelection)).status, 403);
+  assert.equal(
+    (await dispatch(mcpPath, "maintainer", { enabled: true, enabledTools: ["other"] })).status,
+    400,
+  );
+  assert.equal(mcpSettings.enabled, true);
+  assert.deepEqual(
+    mcpSettings.enabledTools,
+    mcpSettings.tools.map(({ name }) => name),
+  );
+  assert.equal((await dispatch(mcpPath, "maintainer", mcpSelection)).status, 200);
+  const limitedTools = await (await dispatch("/mcp", "author", listMcp)).json();
+  assert.deepEqual(
+    limitedTools.result.tools.map(({ name }) => name),
+    ["search_recipes"],
+  );
+  const disabledCall = await (await dispatch("/mcp", "maintainer", readMcp)).json();
+  assert.equal(disabledCall.result.isError, true);
+  assert.match(disabledCall.result.content[0].text, /disabled/u);
+  assert.ok(Array.isArray((await tool("search_recipes", {})).items));
+  assert.equal(
+    (await dispatch(mcpPath, "maintainer", { ...mcpSelection, enabled: false })).status,
+    200,
+  );
+  const paused = await (await dispatch("/mcp", "author", listMcp)).json();
+  assert.deepEqual(paused.result.tools, []);
+  const pausedCall = await (
+    await dispatch("/mcp", "author", {
+      ...readMcp,
+      params: { name: "search_recipes" },
+    })
+  ).json();
+  assert.equal(pausedCall.result.isError, true);
+  assert.match(pausedCall.result.content[0].text, /disabled/u);
+  assert.deepEqual(
+    (await (await dispatch(mcpPath, "maintainer")).json()).enabledTools,
+    mcpSelection.enabledTools,
+  );
+  assert.equal((await dispatch(mcpPath, "maintainer", mcpSettings)).status, 200);
   assert.equal((await dispatch("/assistant", null)).status, 200);
   assert.equal((await dispatch("/api/assistant", null)).status, 401);
   assert.equal(
@@ -340,6 +392,7 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
     "/settings",
     "/settings/openai",
     "/settings/code-policy",
+    "/settings/mcp",
     "/recipe/review/route-example/" + routeRevision,
     "/edit/route-example/" + routeRevision,
     "/improve/route-example/" + routeRevision,

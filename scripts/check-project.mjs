@@ -43,7 +43,7 @@ function layer(file) {
   if (path.startsWith("quality/") || ["format.ts", "code-policy.ts"].includes(path)) {
     return "quality";
   }
-  if (path === "store.ts") {
+  if (["store.ts", "mcp-settings.ts"].includes(path)) {
     return "storage";
   }
   if (["openai.ts", "settings-crypto.ts"].includes(path)) {

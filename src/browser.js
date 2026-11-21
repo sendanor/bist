@@ -1,5 +1,5 @@
 import { t } from "./localization.js";
-import { api } from "./browser-api.js";
+import { api, listMcpTools } from "./browser-api.js";
 import cssLanguage from "highlight.js/lib/languages/css";
 import { diffLines, sourceLines } from "./line-diff.ts";
 import { parsePagePath } from "./routes.ts";
@@ -2127,6 +2127,86 @@ async function assistantPage() {
   ];
 }
 
+/** Build the maintainer controls and a read-only check for Bist's MCP endpoint. */
+async function mcpSettingsForm() {
+  const { enabled, enabledTools, tools } = await api("settings/mcp");
+  const endpoint = new URL("/mcp", location.origin);
+  const active = el("input", { type: "checkbox", name: "enabled" });
+  active.checked = enabled;
+  const status = el("p", { role: "status", className: "muted" });
+  const save = el("button", { type: "submit", className: "primary" }, t("mcp-save"));
+  const check = btn(t("mcp-check"), async () => {
+    check.disabled = true;
+    status.textContent = "";
+    try {
+      const available = await listMcpTools();
+      if (available) {
+        status.textContent = available.length ? t("mcp-check-ready") : t("mcp-check-empty");
+      } else {
+        status.textContent = t("mcp-check-failed");
+      }
+    } catch {
+      status.textContent = t("mcp-check-failed");
+    } finally {
+      check.disabled = false;
+    }
+  });
+  return el(
+    "form",
+    {
+      className: "panel form",
+      /**
+       * Save the instance's tool switch and selected capabilities.
+       * @param event Submission from the maintainer's MCP form.
+       */
+      onsubmit: async (event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        save.disabled = true;
+        status.textContent = "";
+        try {
+          await api("settings/mcp", {
+            enabled: data.has("enabled"),
+            enabledTools: data.getAll("enabledTool"),
+          });
+          status.textContent = t("mcp-saved");
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          save.disabled = false;
+        }
+      },
+    },
+    field("endpoint", t("mcp-endpoint"), { type: "url", readonly: "" }, endpoint.href),
+    el("label", { className: "setting-toggle" }, t("mcp-enable"), active),
+    el(
+      "div",
+      { className: "policy-fields" },
+      ...tools.map(({ name, description }) => {
+        const control = el("input", { type: "checkbox", name: "enabledTool", value: name });
+        control.checked = enabledTools.includes(name);
+        const id = "mcp-tool-" + name;
+        control.setAttribute("aria-labelledby", id);
+        control.setAttribute("aria-describedby", id + "-help");
+        return el(
+          "label",
+          { className: "setting-toggle" },
+          el(
+            "span",
+            {},
+            el("code", { id }, name),
+            el("br"),
+            el("span", { id: id + "-help", className: "muted" }, description),
+          ),
+          control,
+        );
+      }),
+    ),
+    el("div", { className: "actions" }, save, check),
+    status,
+  );
+}
+
 /**
  * Navigate among settings sections while retaining the active section.
  * @param page The current settings route.
@@ -2138,6 +2218,7 @@ async function settingsPage(page) {
     ...[
       ["settings/openai", t("openai-settings")],
       ["settings/code-policy", t("code-policy")],
+      ["settings/mcp", t("mcp-settings")],
     ].map(([path, label]) =>
       el(
         "a",
@@ -2156,6 +2237,9 @@ async function settingsPage(page) {
   if (page === "settings/code-policy") {
     const [heading, form] = await codePolicyPage();
     return [heading, nav, form];
+  }
+  if (page === "settings/mcp") {
+    return [title(t("mcp-settings"), t("mcp-settings-help")), nav, await mcpSettingsForm()];
   }
   return [title(t("settings")), nav];
 }

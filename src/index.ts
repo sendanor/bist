@@ -1,6 +1,7 @@
 import { isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
+import { readMcpSettings, saveMcpSettings } from "./mcp-settings.ts";
 import { Cookbook, RequestError, str, type Database, type Input } from "./store";
 import {
   fetchOpenAiModelCatalog,
@@ -29,6 +30,7 @@ const openAiPaths = new Set([
   "/api/settings/openai",
   "/api/settings/openai/remove-key",
 ]);
+const mcpSettingsPath = "/api/settings/mcp";
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -125,6 +127,7 @@ const tools = [
     { ...listing, state: { enum: ["pending", "approved", "quarantined", "removal"] } },
   ),
 ];
+const toolNames = tools.map(({ name }) => name);
 const headers = {
   "cache-control": "no-store",
   "x-content-type-options": "nosniff",
@@ -191,8 +194,9 @@ function message(error: unknown) {
  * Handle a JSON-RPC request against the MCP recipe tools.
  * @param request The incoming MCP HTTP request.
  * @param cookbook The recipe service for the caller, or null when signed out.
+ * @param db The instance database holding MCP settings.
  */
-async function mcp(request: Request, cookbook: Cookbook | null) {
+async function mcp(request: Request, cookbook: Cookbook | null, db: Database) {
   const rpc = await body(request);
   const { method, id = null } = rpc;
   /**
@@ -233,7 +237,11 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
     return result({});
   }
   if (method === "tools/list") {
-    return result({ tools });
+    const settings = await readMcpSettings(db, toolNames);
+    const available = settings.enabled
+      ? tools.filter(({ name }) => settings.enabledTools.includes(name))
+      : [];
+    return result({ tools: available });
   }
   if (method !== "tools/call") {
     return fail(-32601, "Unknown method.");
@@ -243,6 +251,13 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
       throw new RequestError("Sign in to use the cookbook.");
     }
     const params = object(rpc.params);
+    if (!isString(params.name) || !toolNames.includes(params.name)) {
+      return fail(-32602, "Unknown tool.");
+    }
+    const settings = await readMcpSettings(db, toolNames);
+    if (!settings.enabled || !settings.enabledTools.includes(params.name)) {
+      throw new RequestError("This MCP tool is disabled.");
+    }
     const input = object(params.arguments ?? {});
     let value: unknown;
     switch (params.name) {
@@ -416,7 +431,7 @@ export default {
           .includes(email);
       const cookbook = id ? new Cookbook(env.DB, { id, maintainer }) : null;
       if (url.pathname === "/mcp" && request.method === "POST") {
-        return await mcp(request, cookbook);
+        return await mcp(request, cookbook, env.DB);
       }
       if (!url.pathname.startsWith("/api/")) {
         return json({ error: "Page not found." }, 404);
@@ -424,7 +439,7 @@ export default {
       if (!cookbook) {
         throw new RequestError("Sign in with ChatGPT to access the cookbook.", 401);
       }
-      if (openAiPaths.has(url.pathname) && !maintainer) {
+      if (!maintainer && (openAiPaths.has(url.pathname) || url.pathname === mcpSettingsPath)) {
         throw new RequestError("Maintainer access required.", 403);
       }
       if (request.method === "GET") {
@@ -441,6 +456,8 @@ export default {
           }
           case "/api/settings/openai":
             return json(await openAiStatus(env, cookbook));
+          case mcpSettingsPath:
+            return json({ ...(await readMcpSettings(env.DB, toolNames)), tools });
           case "/api/assistant/models": {
             const { key } = await openAiConnection(env, cookbook, "catalog");
             return json(await fetchOpenAiModelCatalog(key));
@@ -466,6 +483,9 @@ export default {
         }
         if (url.pathname === "/api/settings/openai") {
           return await saveOpenAi(request, env, cookbook);
+        }
+        if (url.pathname === mcpSettingsPath) {
+          return json(await saveMcpSettings(env.DB, await body(request), toolNames));
         }
         if (url.pathname === "/api/settings/openai/remove-key") {
           await cookbook.reserveOpenAiRequest("settings");

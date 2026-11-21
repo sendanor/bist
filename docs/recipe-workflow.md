@@ -51,6 +51,12 @@ The MCP endpoint is `/mcp` on your instance. For a hosted instance, use its auth
 connection. The repository does not distribute connection credentials. See the
 [local MCP example](local-preview.md#try-mcp) for a request you can run without an account.
 
+Maintainers can open **Settings → MCP** to copy the endpoint, check its tool list, pause
+MCP tool calls, or choose which tools clients can use. Changes apply to new calls even
+if a client has cached an older tool list. The MCP endpoint still responds to discovery
+when paused. Existing client and recipe permissions continue to apply, and the browser
+workflow and built-in OpenAI assistant use their own application routes.
+
 - `search_recipes` finds published recipe summaries by keyword and tag. Listing tools accept
   `tags` as an array of exact tags that must all match, alongside the optional `query`.
 - `get_recipe` takes a slug and can retrieve selected parts. It defaults to the current
