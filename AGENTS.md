@@ -13,6 +13,9 @@ built for release as public.
   does not replace reviewing the diff. If a real secret reaches Git, revoke or
   rotate it promptly and coordinate removal from history. Deleting the current
   file leaves earlier copies in Git.
+- Document named JS and TS callables, including methods and test helpers, with JSDoc.
+  Explain their purpose and each parameter. Describe applicable constraints, side
+  effects, and explicit exceptions.
 - Run `npm run check` and `npm test` for code changes. See [QUALITY.md](QUALITY.md)
   for the checks and their scope.
 - Always stage and commit your changes when the task is complete. Keep each

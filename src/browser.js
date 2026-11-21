@@ -43,6 +43,12 @@ let renderId = 0;
 let recentRecipe;
 let filters = { query: "", tag: "" };
 
+/**
+ * Create a DOM element, apply properties, and append its children.
+ * @param tag The HTML element name to create.
+ * @param props The attributes and event listeners to apply.
+ * @param children The ordered DOM nodes or text to append.
+ */
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -57,6 +63,10 @@ function el(tag, props = {}, ...children) {
   node.append(...children.filter((child) => child != null && child !== false));
   return node;
 }
+/**
+ * Create the decorative icon for a named toolbar action.
+ * @param name The key of the icon in the toolbar glyph set.
+ */
 function icon(name) {
   const namespace = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(namespace, "svg");
@@ -67,25 +77,61 @@ function icon(name) {
   svg.append(use);
   return svg;
 }
+/**
+ * Create a status banner with the appropriate feedback role.
+ * @param message The status message shown to the reader.
+ * @param error Whether the banner should announce an error.
+ * @param revisionFeedback Whether to mark the banner as revision feedback.
+ */
 function banner(message = "", error = false, revisionFeedback = false) {
   notice.textContent = message;
   notice.classList.toggle("error", error);
   notice.classList.toggle("revision-feedback", revisionFeedback);
 }
+/**
+ * Make a button that invokes a supplied click handler.
+ * @param text The visible label on the button.
+ * @param fn The click listener to register.
+ * @param style The optional visual style class.
+ */
 function btn(text, fn, style = "") {
   return el("button", { type: "button", className: style, onclick: fn }, text);
 }
+/**
+ * Make a link styled as an application button.
+ * @param text The visible label on the link.
+ * @param href The destination URL for the action.
+ * @param style The optional visual style class.
+ */
 function buttonLink(text, href, style = "") {
   return el("a", { href, className: "button " + style }, text);
 }
+/**
+ * Build a labelled control for a form field.
+ * @param name The form key used for submission.
+ * @param title The label shown above the control.
+ * @param options The extra attributes to apply to the input.
+ * @param value The initial control value.
+ * @param textarea Whether the field accepts multiline content.
+ */
 function field(name, title, options = {}, value = "", textarea = false) {
   const control = el(textarea ? "textarea" : "input", { name, ...options });
   control.value = value;
   return el("label", {}, title, control);
 }
+/**
+ * Create a page heading with optional help text.
+ * @param text The main heading text.
+ * @param detail The optional explanation below the heading.
+ */
 function title(text, detail) {
   return el("div", {}, el("h1", {}, text), detail && el("p", { className: "muted" }, detail));
 }
+/**
+ * Build a link to a particular revision in its browsing context.
+ * @param recipe The summary containing the recipe slug and revision ID.
+ * @param section The navigation section to return to from the recipe.
+ */
 function routeRecipe(recipe, section) {
   return (
     "#recipe/" +
@@ -96,6 +142,12 @@ function routeRecipe(recipe, section) {
     encodeURIComponent(recipe.id)
   );
 }
+/**
+ * Create an empty-state message with an optional next action.
+ * @param titleText The short heading shown in the empty state.
+ * @param detail The explanatory text displayed below it.
+ * @param action The optional action that helps the user proceed.
+ */
 function empty(titleText, detail, action) {
   return el(
     "div",
@@ -106,9 +158,19 @@ function empty(titleText, detail, action) {
     action,
   );
 }
+/**
+ * Render a compact tag or status label.
+ * @param text The text displayed inside the label.
+ * @param style The optional style for a particular status.
+ */
 function chip(text, style = "") {
   return el("span", { className: "chip " + style }, text);
 }
+/**
+ * Render links for a list of recipe revision summaries.
+ * @param rows The ordered revision summaries to display.
+ * @param section The navigation section providing the back-link context.
+ */
 function list(rows, section) {
   return el(
     "div",
@@ -126,12 +188,17 @@ function list(rows, section) {
     ),
   );
 }
+/** Load the published recipe list and build its search controls. */
 async function library() {
   const rows = await api("search?" + new URLSearchParams(filters));
   const form = el(
     "form",
     {
       className: "search",
+      /**
+       * Apply the search query and reload the visible recipe list.
+       * @param event The form submission event to intercept.
+       */
       onsubmit: (event) => {
         event.preventDefault();
         filters = Object.fromEntries(new FormData(event.currentTarget));
@@ -197,7 +264,13 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return batches;
 }
 `,
-    interface: "export declare function chunk<T>(items: readonly T[], size: number): T[][];",
+    interface: `/**
+ * Split the input into ordered batches without changing the original list.
+ * @param items Values to partition in their original order.
+ * @param size Maximum number of values per batch.
+ */
+export declare function chunk<T>(items: readonly T[], size: number): T[][];
+`,
     tests: `import { chunk } from "./source.js";
 const actual = JSON.stringify(chunk([1, 2, 3], 2));
 if (actual !== "[[1,2],[3]]") {
@@ -256,12 +329,21 @@ async function submitWithDuplicateCheck(payload) {
   }
 }
 
+/**
+ * Build the form for creating, editing, or proposing a recipe revision.
+ * @param recipe The optional revision used to prefill the form.
+ * @param replace Whether to update the existing draft in place.
+ */
 function contribute(recipe, replace = false) {
   const isRevision = Boolean(recipe?.id);
   const form = el(
     "form",
     {
       className: "panel form",
+      /**
+       * Collect the contribution fields and submit the selected revision operation.
+       * @param event The browser submit event to handle without navigation.
+       */
       onsubmit: async (event) => {
         event.preventDefault();
         const data = Object.fromEntries(new FormData(form));
@@ -374,13 +456,29 @@ function contribute(recipe, replace = false) {
   ];
 }
 const markdownRenderer = new Renderer();
+/**
+ * Escape raw Markdown HTML before passing it to the sanitizer.
+ * @param token The Markdown token holding raw HTML text.
+ */
 markdownRenderer.html = ({ text }) =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+/**
+ * Render a Markdown image as text without loading an external URL.
+ * @param token The Markdown image token holding its alternate text.
+ */
 markdownRenderer.image = ({ text }) => markdownRenderer.html({ text });
+/**
+ * Render a Markdown heading while preserving the page's heading hierarchy.
+ * @param token The Markdown heading token with its depth and inline content.
+ */
 markdownRenderer.heading = function ({ depth, tokens }) {
   const level = Math.min(6, Math.max(4, depth + 2));
   return `<h${level}>${this.parser.parseInline(tokens)}</h${level}>`;
 };
+/**
+ * Render sanitized Markdown for display in a recipe.
+ * @param value The authored Markdown source for this part.
+ */
 function readableMarkdown(value) {
   const prose = el("div", { className: "recipe-prose" });
   const content = DOMPurify.sanitize(marked.parse(value, { renderer: markdownRenderer }), {
@@ -439,6 +537,12 @@ function readableMarkdown(value) {
   prose.append(content);
   return prose;
 }
+/**
+ * Render a code listing with its line numbers and empty state.
+ * @param lines The lines to display in source order.
+ * @param wrap Whether line wrapping is enabled in the viewer.
+ * @param label The viewer's accessible label.
+ */
 function codeBox(lines, wrap, label) {
   return el(
     "pre",
@@ -467,6 +571,12 @@ function codeBox(lines, wrap, label) {
     ),
   );
 }
+/**
+ * Render the previous and current contents as aligned columns.
+ * @param before The previous text used as the diff baseline.
+ * @param after The current text to compare with the baseline.
+ * @param wrap Whether source lines wrap in the viewer.
+ */
 function diff(before, after, wrap) {
   if (before === after) {
     return el("p", { className: "file-empty" }, t("this-file-is-unchanged"));
@@ -511,6 +621,11 @@ function diff(before, after, wrap) {
     codeBox(rows, wrap, "Changes from base revision"),
   );
 }
+/**
+ * Tokenize and highlight source lines for the recipe viewer.
+ * @param source The plain source text to highlight.
+ * @param language The syntax highlighting language for this part.
+ */
 function highlightedLines(source, language) {
   const highlighted = highlighter.highlight(source.replace(/\n$/, ""), {
     language,
@@ -524,6 +639,11 @@ function highlightedLines(source, language) {
     RETURN_DOM_FRAGMENT: true,
   });
   const lines = [document.createDocumentFragment()];
+  /**
+   * Collect one token subtree into lines while preserving its formatting classes.
+   * @param node The current token tree node to traverse.
+   * @param classes The highlighting classes inherited from parent tokens.
+   */
   function collect(node, classes = []) {
     if (node.nodeType === Node.TEXT_NODE) {
       for (const [index, text] of node.textContent.split("\n").entries()) {
@@ -589,6 +709,10 @@ function openLineComposer(comments, trigger, submit) {
     "form",
     {
       className: "line-comment-form",
+      /**
+       * Send the note and update the line-comment composer.
+       * @param event The browser event from submitting the comment form.
+       */
       onsubmit: async (event) => {
         event.preventDefault();
         const body = input.value.trim();
@@ -700,6 +824,10 @@ function reviewLines(recipe, part, value) {
   );
 }
 
+/**
+ * Build the visible metadata and body for one review comment.
+ * @param comment The saved review comment and its anchor.
+ */
 function lineCommentText(comment) {
   return el(
     "div",
@@ -709,6 +837,14 @@ function lineCommentText(comment) {
   );
 }
 
+/**
+ * Build a recipe part with reading, copying, and review controls.
+ * @param recipe The revision containing the current part.
+ * @param key The key of the file part to display.
+ * @param value The current text of the part.
+ * @param previous The text of the same part in the base revision.
+ * @param hasBase Whether a base revision is available for comparison.
+ */
 function fileSection(recipe, key, value, previous, hasBase) {
   const name = parts[key];
   const prose = key === "documentation" || key === "instructions";
@@ -761,6 +897,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
   });
   labelFileTool(copy, "copy", prose ? t("copy-markdown") : t("copy-code"));
   labelFileTool(wrapButton, "wrap", t("wrap-lines"));
+  /** Redraw the open part using the selected display and wrapping mode. */
   function renderPart() {
     status.textContent = "";
     if (compare) {
@@ -810,6 +947,11 @@ function fileSection(recipe, key, value, previous, hasBase) {
     ),
   };
 }
+/**
+ * Assemble the available recipe parts into the revision viewer.
+ * @param recipe The current recipe revision to display.
+ * @param base The optional prior revision used for comparisons.
+ */
 function fileViewer(recipe, base) {
   const keys = Object.keys(parts).filter(
     (key) =>
@@ -856,6 +998,12 @@ const actionDescriptions = {
  */
 function revisionChoices(recipe) {
   const choices = [];
+  /**
+   * Add an available review action to the revision menu.
+   * @param action The operation sent to the review endpoint.
+   * @param label The visible label in the action menu.
+   * @param destructive Whether to style the action as destructive.
+   */
   const addAction = (action, label, destructive = false) =>
     choices.push({ action, label, destructive });
   if (maintainer && recipe.state === "pending" && !recipe.removal_reason) {
@@ -994,11 +1142,21 @@ function revisionControls(recipe, section) {
   );
   const menu = el("div", { className: "revision-menu", id: "revision-options", hidden: "" });
   const wrapper = el("div", { className: "revision-controls" }, trigger, menu);
+  /**
+   * Set the action menu state and its accessibility attributes.
+   * @param open Whether the action menu should be visible.
+   */
   function toggle(open) {
     menu.hidden = !open;
     trigger.setAttribute("aria-expanded", String(open));
   }
   const page = location.hash;
+  /**
+   * Send a revision action and report its result to the reader.
+   * @param action The review operation to run.
+   * @param reason The optional reason supplied for the operation.
+   * @param dialog The confirmation dialog to update on completion.
+   */
   async function submit(action, reason, dialog) {
     await api("action", {
       slug: recipe.slug,
@@ -1052,6 +1210,12 @@ function revisionControls(recipe, section) {
   });
   return wrapper;
 }
+/**
+ * Load a revision and build the recipe page with its toolbar.
+ * @param section The section used for back navigation.
+ * @param slug The slug of the recipe to retrieve.
+ * @param revision The requested revision ID, when present.
+ */
 async function recipePage(section, slug, revision) {
   const recipe = await api(
     "recipe?" + new URLSearchParams({ slug, revision, reviewComments: "1" }),
@@ -1093,6 +1257,7 @@ async function recipePage(section, slug, revision) {
     ],
   };
 }
+/** Build the maintainer form for editing the recipe quality policy. */
 async function settingsPage() {
   const { policy, prettierOptions, eslintRules, qualityOptions } = await api("settings");
   const form = el("form", { className: "form code-settings" });
@@ -1159,6 +1324,7 @@ async function settingsPage() {
   );
   const ruleFilter = el("input", { type: "search", placeholder: t("try-eqeqeq-or-no-console") });
   const matches = el("ul", { className: "rule-matches" });
+  /** Replace the rule suggestions with matches for the search query. */
   const updateMatches = () => {
     const query = ruleFilter.value.trim().toLowerCase();
     matches.replaceChildren(
@@ -1202,6 +1368,7 @@ async function settingsPage() {
       { className: "panel" },
       el("h2", {}, t("eslint")),
       el("p", { className: "muted" }, t("use-off-warn-or-error-for-options-use")),
+      el("p", { className: "muted" }, t("jsdoc-required")),
       el("label", {}, t("eslint-configuration-json"), lintConfig),
       el("label", { className: "section" }, t("find-a-bundled-rule"), ruleFilter),
       matches,
@@ -1244,6 +1411,7 @@ async function settingsPage() {
   });
   return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
 }
+/** Render the current hash route and discard stale asynchronous results. */
 async function render() {
   const current = ++renderId;
   toolbar.replaceChildren();

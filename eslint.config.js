@@ -31,6 +31,7 @@ export default [
     rules: {
       ...eslint.configs.recommended.rules,
       ...shared,
+      "quality/documentation": "error",
       "quality/directives": "error",
       "quality/no-loose-return": "error",
       "quality/explicit-any": "error",
@@ -59,7 +60,6 @@ export default [
   {
     files: ["scripts/**", "tests/**", "**/*.config.js", "src/quality/**", "src/assets.d.ts"],
     rules: {
-      "quality/documentation": "off",
       "quality/document-throws": "off",
       "quality/named-guards": "off",
     },

@@ -116,6 +116,7 @@
   "try-a-broader-keyword-or-clear-the-tag": "Try a broader keyword or clear the tag filter.",
   "try-eqeqeq-or-no-console": "Try eqeqeq or no-console",
   "use-off-warn-or-error-for-options-use": "Use off, warn, or error. For options, use an array such as [\"error\", \"always\"]. Overrides can set different rules for source, interface, and tests.",
+  "jsdoc-required": "JSDoc is required for named callables in source, interface, and tests.",
   "what-does-this-recipe-do": "What does this recipe do?",
   "what-should-change": "What needs to change?",
   "why-quarantine-revision": "Why should this revision be quarantined?",

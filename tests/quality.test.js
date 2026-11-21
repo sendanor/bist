@@ -10,6 +10,13 @@ import { assertPublicBundle } from "../scripts/public-bundle.mjs";
 
 const ruleSet = { ...qualityRules, ...recipeRules };
 
+/**
+ * Evaluate one quality rule against a synthetic recipe source fixture.
+ * @param rule The bundled rule to enable for this check.
+ * @param source The TypeScript or JSX fixture to lint.
+ * @param options The optional settings for the chosen rule.
+ * @param filename The virtual recipe filename associated with the fixture.
+ */
 function check(rule, source, options = [], filename = "source.tsx") {
   const linter = new Linter();
   return linter.verify(
@@ -37,6 +44,25 @@ const cases = [
     /describe what parameter/i,
   ],
   ["documentation", "const inputs = [1].map((n) => n + 1);"],
+  ["documentation", "/* Explain the intended use. */\nfunction f() {}", /add jsdoc/i],
+  [
+    "documentation",
+    "/** @returns {number} Number of loaded records. */\nfunction f() { return 0; }",
+    /add jsdoc/i,
+  ],
+  ["documentation", "const api = { load(count: number) {} };", /add jsdoc/i],
+  [
+    "documentation",
+    "const api = {\n/** Load the selected records.\n * @param count Maximum number of records to load.\n */\nload(count: number) {} };",
+  ],
+  [
+    "documentation",
+    "class Loader {\n/** Store the supplied count.\n * @param quantity Maximum records returned at once.\n */\nconstructor(readonly count: number) {} }",
+    /parameter 'count'/i,
+  ],
+  ["documentation", "abstract class Loader { abstract load(count: number): void }", /add jsdoc/i],
+  ["documentation", "interface Factory { new (count: number): object }", /add jsdoc/i],
+  ["documentation", "let onSubmit; onSubmit = () => {};", /add jsdoc/i],
   [
     "documentation",
     "// quality-ignore-next-line documentation -- Framework generates its contract\nfunction f() {}",

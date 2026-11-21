@@ -71,8 +71,13 @@ const customRules = {
   ),
   "quality/undeclared-value": {
     meta: { schema: [] },
+    /**
+     * Build the listener that finds unresolved value references.
+     * @param context The ESLint rule context for the current recipe part.
+     */
     create(context: ValueRuleContext) {
       return {
+        /** Report unresolved value references after scope analysis. */
         "Program:exit"() {
           for (const reference of context.sourceCode.scopeManager.globalScope.through) {
             if (reference.isValueReference) {
@@ -99,6 +104,10 @@ interface ValueRuleContext {
       };
     };
   };
+  /**
+   * Report a diagnostic for an unresolved value reference.
+   * @param diagnostic The reference location and message to report.
+   */
   report(diagnostic: ValueDiagnostic): void;
 }
 interface ValueDiagnostic {
@@ -113,6 +122,7 @@ const schemaValidator = new Validator();
 
 type PolicyValue = string | number | boolean;
 type Severity = "off" | "warn" | "error";
+const documentationRule = "quality/documentation";
 export const qualityOptions = [
   { key: "typeCheck", label: "TypeScript types across recipe code parts", default: "warn" },
   { key: "cssClasses", label: "Lowercase, hyphenated CSS class names", default: "error" },
@@ -135,6 +145,11 @@ export type Policy = {
   quality: Record<QualityKey, Severity> & { warningsAsErrors: boolean };
 };
 
+/**
+ * Require an object before reading configuration keys.
+ * @param value The unvalidated settings value supplied by the caller.
+ * @throws {Error} When the value is missing, an array, or not an object.
+ */
 function options(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected a settings object.");
@@ -142,6 +157,11 @@ function options(value: unknown) {
   return value as Record<string, unknown>;
 }
 
+/**
+ * Validate bundled rule names, levels, and options before saving them.
+ * @param eslint The submitted ESLint rules keyed by bundled rule name.
+ * @throws {Error} When a rule, severity, or option is unsupported.
+ */
 function validateRules(eslint: Record<string, unknown>): Policy["eslint"] {
   const rules: Policy["eslint"] = Object.create(null);
   for (const [name, config] of Object.entries(eslint)) {
@@ -167,13 +187,21 @@ function validateRules(eslint: Record<string, unknown>): Policy["eslint"] {
         throw new Error(`Invalid options for ${name}: ${result.errors[0].message}`);
       }
     }
-    rules[name] = (
-      Array.isArray(config) ? [severity, ...args] : severity
-    ) as ESLintConfig.RuleEntry;
+    rules[name] =
+      name === documentationRule
+        ? "error"
+        : ((Array.isArray(config) ? [severity, ...args] : severity) as ESLintConfig.RuleEntry);
   }
   return rules;
 }
 
+/**
+ * Reject unrecognized keys in a settings section.
+ * @param input The user-supplied settings section to inspect.
+ * @param keys The allowed keys for the settings section.
+ * @param label The section name to use in diagnostics.
+ * @throws {Error} When the section contains an unsupported key.
+ */
 function rejectKeys(input: Record<string, unknown>, keys: readonly string[], label: string) {
   for (const key of Object.keys(input)) {
     if (!keys.includes(key)) {
@@ -182,6 +210,11 @@ function rejectKeys(input: Record<string, unknown>, keys: readonly string[], lab
   }
 }
 
+/**
+ * Validate the recipe quality policy and apply required defaults.
+ * @param value The proposed policy read from JSON or stored settings.
+ * @throws {Error} When a setting is unknown or invalid.
+ */
 export function validateCodePolicy(value: unknown): Policy {
   const input = options(value);
   rejectKeys(
@@ -245,7 +278,7 @@ export function validateCodePolicy(value: unknown): Policy {
   }
   return {
     prettier: formatted,
-    eslint: validateRules(eslint),
+    eslint: { ...validateRules(eslint), [documentationRule]: "error" },
     globals,
     settings: options(input.settings ?? {}),
     overrides: Object.fromEntries(
@@ -287,7 +320,6 @@ export const defaultCodePolicy = validateCodePolicy({
     interface: { "quality/duplicate-code": "off", "quality/file-size": "off" },
     tests: {
       "quality/duplicate-code": "warn",
-      "quality/documentation": "off",
       "quality/document-throws": "off",
       "quality/function-size": "off",
       "quality/file-size": "off",

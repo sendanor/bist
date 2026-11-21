@@ -9,6 +9,7 @@ import { getEncoding } from "js-tiktoken";
 import { performance } from "node:perf_hooks";
 
 const folder = await mkdtemp(join(tmpdir(), "cookbook-"));
+/** Start a test Worker using the shared temporary database directory. */
 const worker = () =>
   new Miniflare({
     scriptPath: resolve("dist/server/index.js"),
@@ -20,6 +21,12 @@ const worker = () =>
     bindings: { MAINTAINER_EMAILS: "maintainer@example.test" },
   });
 let runtime = worker();
+/**
+ * Dispatch a request against the local Worker with a synthetic identity.
+ * @param path The path to request within the Worker.
+ * @param user The fixture identity or null for anonymous access.
+ * @param data The optional JSON payload for a POST request.
+ */
 function dispatch(path, user, data) {
   const origin = "https://cookbook.local";
   const headers = { origin: origin };
@@ -36,6 +43,12 @@ function dispatch(path, user, data) {
     body: data && JSON.stringify(data),
   });
 }
+/**
+ * Invoke a local MCP tool and require a successful result.
+ * @param name The MCP tool name to invoke.
+ * @param args The arguments to pass to the tool.
+ * @param user The synthetic identity making the request.
+ */
 async function tool(name, args, user = "author") {
   const response = await dispatch("/mcp", user, {
     jsonrpc: "2.0",
@@ -66,6 +79,10 @@ async function verifyRecipeTests(files) {
 }
 
 const tokenizer = getEncoding("o200k_base");
+/**
+ * Measure the serialized size of an MCP result in bytes and tokens.
+ * @param result The result to serialize exactly as returned.
+ */
 const measure = (result) => {
   const text = JSON.stringify(result);
   return { bytes: Buffer.byteLength(text), tokens: tokenizer.encode(text).length };
@@ -93,9 +110,19 @@ try {
     summary: "Split items into fixed-size batches.",
     tags: ["arrays", "utilities"],
     files: {
-      source:
-        'export function chunk(items,size){if(!Number.isSafeInteger(size)||size<1){throw new RangeError("Invalid size");}const out=[];for(let i=0;i<items.length;i+=size){out.push(items.slice(i,i+size));}return out;}',
-      interface: "export declare function chunk<T>(items:readonly T[],size:number):T[][];",
+      source: `/**
+ * Divide items into consecutive batches.
+ * @param items Values to allocate to batches.
+ * @param size Maximum number of items per batch.
+ * @throws {RangeError} When size is not a positive safe integer.
+ */
+export function chunk(items,size){if(!Number.isSafeInteger(size)||size<1){throw new RangeError("Invalid size");}const out=[];for(let i=0;i<items.length;i+=size){out.push(items.slice(i,i+size));}return out;}`,
+      interface: `/**
+ * Divide items into consecutive batches.
+ * @param items Values to allocate to batches.
+ * @param size Maximum number of items per batch.
+ */
+export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
       tests:
         'import assert from "node:assert/strict";\nimport {chunk} from "./source.js";\nassert.deepEqual(chunk([1,2,3],2),[[1,2],[3]]);',
       documentation:
@@ -109,10 +136,11 @@ try {
   assert.equal(settings.policy.prettier.printWidth, 100);
   assert.equal(settings.policy.prettier.singleAttributePerLine, true);
   assert.equal(settings.policy.quality.warningsAsErrors, false);
+  assert.equal(settings.policy.eslint["quality/documentation"], "error");
 
   const legacyPolicy = {
     prettier: { singleQuote: true, printWidth: 90 },
-    eslint: { "no-debugger": false },
+    eslint: { "no-debugger": false, "quality/documentation": "warn" },
   };
   await db
     .prepare("INSERT INTO code_policy (id, config) VALUES (1, ?)")
@@ -123,12 +151,32 @@ try {
   assert.equal(upgraded.prettier.singleQuote, true);
   assert.equal(upgraded.eslint["no-debugger"], 0);
   assert.equal(upgraded.eslint.curly, "error");
+  assert.equal(upgraded.eslint["quality/documentation"], "error");
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
   const shell = await (await dispatch("/", null)).text();
   assert.match(shell, /recipes and guides/);
   assert.doesNotMatch(shell, /\{\{t:/);
 
+  /**
+   * Submit a recipe snapshot as the test author.
+   * @param slug The slug assigned to the fixture.
+   * @param files The files included with the submitted snapshot.
+   */
   const submit = (slug, files) => dispatch("/api/submit", "author", { ...payload, slug, files });
+  const attemptedDowngrade = {
+    ...settings.policy,
+    eslint: { ...settings.policy.eslint, "quality/documentation": "off" },
+    overrides: { tests: { "quality/documentation": "off" } },
+  };
+  assert.equal((await dispatch("/api/settings", "maintainer", attemptedDowngrade)).status, 200);
+  for (const part of ["source", "interface", "tests"]) {
+    const source =
+      part === "interface" ? "declare function value(): number;" : "function value() { return 1; }";
+    const rejected = await submit("missing-jsdoc-" + part, { [part]: source });
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json()).error, /quality\/documentation/);
+  }
+  assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
   const guide = await tool("submit_recipe", {
     ...payload,
     slug: "architecture-guide",
@@ -138,6 +186,10 @@ try {
   assert.deepEqual(guideFiles.files, {
     documentation: "# Architecture\nUse a service boundary.\n",
   });
+  /**
+   * Send a maintainer action for the documentation-only fixture.
+   * @param action The review action to apply to the guide.
+   */
   const guideDecision = (action) =>
     dispatch("/api/action", "maintainer", {
       slug: guide.slug,
@@ -178,9 +230,19 @@ try {
     source: "export const duplicatePolicyExample = 912;",
     instructions: "A unique instruction for duplicate policy QA.",
   };
+  /**
+   * Submit the shared duplicate-policy fixture for a new slug.
+   * @param slug The slug assigned to the duplicate-policy attempt.
+   * @param options The extra submission flags used by this case.
+   */
   const submitPolicyExample = (slug, options = {}) =>
     dispatch("/api/submit", "author", { ...payload, slug, files: units, ...options });
   assert.equal((await submitPolicyExample("policy-duplicate-original")).status, 201);
+  /**
+   * Save duplicate severities on the local test Worker.
+   * @param duplicateCode The severity for matching code snapshots.
+   * @param duplicateProse The severity for matching documentation and instructions.
+   */
   const setDuplicates = (duplicateCode, duplicateProse) =>
     dispatch("/api/settings", "maintainer", {
       ...settings.policy,
@@ -333,7 +395,16 @@ try {
   }
   const hookDeps = await (
     await submit("hook-dependencies", {
-      source: `declare function useEffect(callback: () => void, deps: readonly string[]): void;
+      source: `/**
+ * Register the effect with its dependencies.
+ * @param callback The effect to run after rendering.
+ * @param deps The inputs that trigger another run.
+ */
+declare function useEffect(callback: () => void, deps: readonly string[]): void;
+/**
+ * Render a paragraph labelled for assistive technology.
+ * @param label The accessible name for the paragraph.
+ */
 export function Panel(label: string) {
   useEffect(() => { console.log(label); }, []);
   return <p aria-label={label} id="recipe" />;
@@ -350,8 +421,11 @@ export function Panel(label: string) {
   };
   assert.equal((await dispatch("/api/settings", "maintainer", nativeTestPolicy)).status, 200);
   const guardRecipe = {
-    source:
-      "export function hasFields(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null; }",
+    source: `/**
+ * Check that a value is a non-null object.
+ * @param value The input to narrow before use.
+ */
+export function hasFields(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null; }`,
     tests: `import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { hasFields } from "./source.ts";
@@ -560,6 +634,12 @@ describe("hasFields", () => {
     editVersion: draft.editVersion,
     files: { source: "export const value = 2;" },
   };
+  /**
+   * Send a review action for the submitted revision at a specified edit version.
+   * @param action The review operation to request.
+   * @param editVersion The saved edit version that the request expects.
+   * @param user The synthetic user exercising review access.
+   */
   const review = (action, editVersion, user = "maintainer") =>
     dispatch("/api/action", user, {
       ...draftRef,
@@ -627,6 +707,11 @@ describe("hasFields", () => {
     editVersion: undefined,
   });
   const duplicateRef = { slug: duplicate.slug, revision: duplicate.id };
+  /**
+   * Exercise a review action against the duplicate fixture.
+   * @param user The synthetic user making the request.
+   * @param action The review action to apply to the duplicate.
+   */
   const duplicateAction = (user, action) =>
     dispatch("/api/action", user, {
       ...duplicateRef,
@@ -665,6 +750,12 @@ describe("hasFields", () => {
 
   const submitted = await tool("submit_recipe", payload);
   const revision = { slug: submitted.slug, revision: submitted.id };
+  /**
+   * Exercise state transitions on the submitted recipe revision.
+   * @param kind The review or removal operation to exercise.
+   * @param user The fixture user making the request.
+   * @param reason The optional explanation for the action.
+   */
   const action = (kind, user = "maintainer", reason) =>
     dispatch("/api/action", user, { ...revision, action: kind, reason });
   assert.deepEqual(await tool("search_recipes", {}, "reader"), []);
