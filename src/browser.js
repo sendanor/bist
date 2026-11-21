@@ -42,7 +42,7 @@ const stateLabels = {
 let maintainer = false;
 let renderId = 0;
 let recentRecipe;
-let filters = { query: "", tag: "" };
+const listingPaths = new Map();
 
 /**
  * Create a DOM element, apply properties, and append its children.
@@ -175,7 +175,7 @@ function chip(text, style = "") {
 function list(rows, section) {
   return el(
     "div",
-    { className: "list" },
+    { className: section === "review" ? "list review-list" : "list" },
     ...rows.map((row) =>
       el(
         "article",
@@ -183,63 +183,134 @@ function list(rows, section) {
         el("h3", {}, el("a", { href: routeRecipe(row, section) }, row.title)),
         el("p", { className: "muted" }, row.summary),
         chip(stateLabels[row.state] ?? row.state, "state-" + row.state),
-        row.removal_reason && chip("Removal requested"),
+        row.removal_reason && chip(t("removal-requested-label")),
         ...row.tags.map((tag) => chip(tag)),
       ),
     ),
   );
 }
-/** Load the published recipe list and build its search controls. */
-async function library() {
-  const rows = await api("search?" + new URLSearchParams(filters));
-  const form = el(
+/**
+ * Build a link to a filtered list page without carrying filters across sections.
+ * @param section The library, personal revisions, or review queue.
+ * @param filters The values for the submitted filters.
+ * @param cursor The optional boundary of the requested page.
+ */
+function listingPath(section, filters, cursor) {
+  const params = new URLSearchParams();
+  for (const name of ["query", "tag", "state"]) {
+    const value = filters.get(name)?.trim();
+    if (value) {
+      params.set(name, value);
+    }
+  }
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+  return "/" + section + (params.size ? "?" + params : "");
+}
+
+/**
+ * Build a filter form that starts again at the first page when submitted.
+ * @param section The active list section.
+ * @param filters The values shown in the active filter controls.
+ */
+function listingForm(section, filters) {
+  const review = section === "review";
+  const status = el(
+    "select",
+    { name: "state" },
+    el("option", { value: "" }, t("all-statuses")),
+    el("option", { value: "pending" }, t("pending-review")),
+    el("option", { value: "approved" }, t("approved")),
+    el("option", { value: "quarantined" }, t("quarantined")),
+    el("option", { value: "removal" }, t("removal-requested-label")),
+  );
+  status.value = filters.get("state") ?? "";
+  const active = filters.get("query") || filters.get("tag") || filters.get("state");
+  return el(
     "form",
     {
-      className: "search",
+      className: review ? "search review-search" : "search",
       /**
-       * Apply the search query and reload the visible recipe list.
-       * @param event The form submission event to intercept.
+       * Apply the form's filters and start at the first page.
+       * @param event Form submission from the filter controls.
        */
       onsubmit: (event) => {
         event.preventDefault();
-        filters = Object.fromEntries(new FormData(event.currentTarget));
-        render();
+        navigate(listingPath(section, new FormData(event.currentTarget)));
       },
     },
     field(
       "query",
-      t("search-recipes"),
-      { placeholder: t("search-by-purpose-or-keyword"), maxlength: 160 },
-      filters.query,
+      section === "library" ? t("search-recipes") : t("search-revisions"),
+      { type: "search", placeholder: t("search-by-purpose-or-keyword"), maxlength: 160 },
+      filters.get("query") ?? "",
     ),
-    field("tag", t("tag"), { placeholder: t("e-g-utilities"), maxlength: 32 }, filters.tag),
-    el("button", { className: "primary" }, t("search")),
-  );
-  return [
+    field(
+      "tag",
+      t("tag"),
+      { placeholder: t("e-g-utilities"), maxlength: 32 },
+      filters.get("tag") ?? "",
+    ),
+    review && el("label", {}, t("status"), status),
     el(
-      "section",
-      { className: "hero" },
-      el("h1", {}, t("recipe-library")),
-      el("p", {}, t("find-recipes-and-guides")),
+      "div",
+      { className: "list-filter-actions" },
+      el("button", { className: "primary" }, t("search")),
+      active && buttonLink(t("clear-filters"), "/" + section),
     ),
-    form,
-    el("h2", {}, filters.query || filters.tag ? t("search-results") : t("published-recipes")),
-    rows.length
-      ? list(rows, "library")
-      : filters.query || filters.tag
-        ? empty(
-            t("no-matching-recipes"),
-            t("try-a-broader-keyword-or-clear-the-tag"),
-            btn(t("clear-filters"), () => {
-              filters = { query: "", tag: "" };
-              render();
-            }),
-          )
-        : empty(
-            t("no-published-recipes-yet"),
-            t("submit-a-recipe-for-review-to-start-your"),
-            buttonLink(t("contribute-a-recipe"), "/contribute"),
-          ),
+  );
+}
+
+/**
+ * Load one page and show the filters, matching revisions, and navigation.
+ * @param section The active list section in the browser.
+ */
+async function listingPage(section) {
+  const filters = new URLSearchParams(location.search);
+  const cursor = filters.get("cursor");
+  const endpoint = { library: "search", mine: "mine", review: "queue" }[section];
+  const path = listingPath(section, filters, cursor);
+  const params = new URL(path, location.origin).search;
+  const { items, previousCursor, nextCursor } = await api(endpoint + params);
+  const active = filters.get("query") || filters.get("tag") || filters.get("state");
+  const descriptions = {
+    library: t("find-recipes-and-guides"),
+    mine: t("track-your-submissions-and-review-feedback"),
+    review: t("inspect-changes-record-a-decision-and-publish-approved"),
+  };
+  const emptyLabels = {
+    library: t("no-published-recipes-yet"),
+    mine: t("no-revisions-yet"),
+    review: t("review-queue-is-empty"),
+  };
+  const emptyDetails = {
+    library: t("submit-a-recipe-for-review-to-start-your"),
+    mine: t("your-submitted-snapshots-will-appear-here"),
+    review: t("pending-reviews-and-approved-revisions-waiting-to-publish"),
+  };
+  return [
+    title(labels[section], descriptions[section]),
+    listingForm(section, filters),
+    items.length
+      ? list(items, section)
+      : empty(
+          active || cursor ? t("no-matching-recipes") : emptyLabels[section],
+          active || cursor ? "" : emptyDetails[section],
+          cursor
+            ? buttonLink(t("first-page"), listingPath(section, filters))
+            : section === "library" && !active
+              ? buttonLink(t("contribute-a-recipe"), "/contribute")
+              : null,
+        ),
+    (previousCursor || nextCursor) &&
+      el(
+        "nav",
+        { className: "list-pagination", "aria-label": t("page-navigation") },
+        previousCursor &&
+          buttonLink(t("previous-page"), listingPath(section, filters, previousCursor)),
+        nextCursor && buttonLink(t("next-page"), listingPath(section, filters, nextCursor)),
+      ),
   ];
 }
 const example = {
@@ -1216,7 +1287,7 @@ function revisionControls(recipe, section) {
     }
     banner(action === "publish" ? t("recipe-published") : t("revision-updated"), false, true);
     if (["remove_draft", "approve_removal"].includes(action)) {
-      navigate("/" + section);
+      navigate(listingPaths.get(section) ?? "/" + section);
     } else {
       await render();
       toolbar.querySelector("button")?.focus({ preventScroll: true });
@@ -1466,7 +1537,7 @@ async function render() {
   outlet.classList.toggle("recipe-view", reading);
   revisionBack.hidden = !reading;
   if (reading) {
-    revisionBack.href = "/" + section;
+    revisionBack.href = listingPaths.get(section) ?? "/" + section;
     const backLabel = t("back-to") + (labels[section] ?? t("library")).toLowerCase();
     revisionBack.setAttribute("aria-label", backLabel);
     revisionBack.title = backLabel;
@@ -1498,26 +1569,11 @@ async function render() {
       view = contribute();
     } else if (section === "settings") {
       view = await settingsPage();
-    } else if (section === "mine" || section === "review") {
-      const rows = await api(section === "mine" ? "mine" : "queue");
-      view = [
-        title(
-          labels[section],
-          section === "mine"
-            ? t("track-your-submissions-and-review-feedback")
-            : t("inspect-changes-record-a-decision-and-publish-approved"),
-        ),
-        rows.length
-          ? list(rows, section)
-          : empty(
-              section === "mine" ? t("no-revisions-yet") : t("review-queue-is-empty"),
-              section === "mine"
-                ? t("your-submitted-snapshots-will-appear-here")
-                : t("pending-reviews-and-approved-revisions-waiting-to-publish"),
-            ),
-      ];
     } else {
-      view = await library();
+      view = await listingPage(section);
+      if (current === renderId) {
+        listingPaths.set(section, location.pathname + location.search);
+      }
     }
     if (current === renderId) {
       outlet.replaceChildren(...view.filter((item) => item && item.nodeType));

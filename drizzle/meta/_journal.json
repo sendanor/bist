@@ -57,6 +57,13 @@
       "when": 1795219200007,
       "tag": "0007_revision_comments",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795219200008,
+      "tag": "0008_revision_listing_indexes",
+      "breakpoints": true
     }
   ]
 }

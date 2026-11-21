@@ -123,6 +123,10 @@ try {
   await db.batch(
     commentMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
   );
+  const listingMigration = await readFile("drizzle/0008_revision_listing_indexes.sql", "utf8");
+  await db.batch(
+    listingMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
+  );
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -757,7 +761,7 @@ describe("hasFields", () => {
     fileNote,
   );
   assert.equal(
-    (await tool("my_revisions", {})).filter(({ slug }) => slug === draft.slug).length,
+    (await tool("my_revisions", {})).items.filter(({ slug }) => slug === draft.slug).length,
     1,
   );
   assert.equal((await dispatch("/api/submit", "author", replace)).status, 409);
@@ -842,7 +846,7 @@ describe("hasFields", () => {
    */
   const action = (kind, user = "maintainer", reason) =>
     dispatch("/api/action", user, { ...revision, action: kind, reason });
-  assert.deepEqual(await tool("search_recipes", {}, "reader"), []);
+  assert.deepEqual((await tool("search_recipes", {}, "reader")).items, []);
   assert.equal((await tool("get_recipe", { ...revision, parts: ["source"] })).state, "pending");
   assert.equal(
     (await dispatch("/api/recipe?" + new URLSearchParams(revision), "reader")).status,
@@ -851,7 +855,7 @@ describe("hasFields", () => {
   assert.equal((await action("publish")).status, 409);
   assert.equal((await action("approve", "author")).status, 403);
   assert.equal((await action("approve")).status, 200);
-  assert.deepEqual(await tool("search_recipes", {}, "reader"), []);
+  assert.deepEqual((await tool("search_recipes", {}, "reader")).items, []);
   assert.equal((await action("publish")).status, 200);
   const publishedFeedback = await dispatch("/api/comment", "maintainer", {
     ...feedback,
@@ -890,7 +894,8 @@ describe("hasFields", () => {
   assert.match((await override.json()).warnings.join("\n"), /cssClasses/);
   assert.equal((await submit("source-rule", { source: "debugger;" })).status, 400);
   assert.equal(
-    (await tool("search_recipes", { query: "fixed-size batches", tag: "arrays" }, "reader"))[0].id,
+    (await tool("search_recipes", { query: "fixed-size batches", tag: "arrays" }, "reader"))
+      .items[0].id,
     submitted.id,
   );
   const start = performance.now();
@@ -929,7 +934,7 @@ describe("hasFields", () => {
     },
     "reader",
   );
-  assert.equal((await tool("search_recipes", {}, "reader"))[0].id, submitted.id);
+  assert.equal((await tool("search_recipes", {}, "reader")).items[0].id, submitted.id);
   assert.equal(
     (
       await dispatch("/api/action", "reader", {
@@ -944,7 +949,7 @@ describe("hasFields", () => {
     (await action("quarantine", "maintainer", "Exercise immediate removal from search")).status,
     200,
   );
-  assert.deepEqual(await tool("search_recipes", {}, "reader"), []);
+  assert.deepEqual((await tool("search_recipes", {}, "reader")).items, []);
   assert.equal(
     (await dispatch("/api/recipe?" + new URLSearchParams(revision), "author")).status,
     404,
@@ -954,6 +959,80 @@ describe("hasFields", () => {
     200,
   );
   assert.equal((await action("approve_removal")).status, 200);
+  const paginationDb = await runtime.getD1Database("DB");
+  const sampleSize = 27;
+  const sampleIds = Array.from(
+    { length: sampleSize },
+    (_, index) => "00000000-0000-4000-8000-" + String(index + 100).padStart(12, "0"),
+  );
+  await paginationDb.batch(
+    sampleIds.flatMap((id, index) => {
+      const slug = "paging-fixture-" + index;
+      const state = index < 25 ? "pending" : index === 25 ? "quarantined" : "published";
+      return [
+        paginationDb
+          .prepare("INSERT INTO recipes (slug, owner, live) VALUES (?, 'author', ?)")
+          .bind(slug, state === "published" ? id : null),
+        paginationDb
+          .prepare(
+            `INSERT INTO revisions
+             (id, slug, author, title, summary, tags, state, created, published_at, removal_reason)
+           VALUES (?, ?, 'author', 'Cursor sample', 'Shared paging keyword', '["paging"]', ?,
+                   '2026-01-02 03:04:05', ?, ?)`,
+          )
+          .bind(
+            id,
+            slug,
+            state,
+            state === "published" ? "2026-01-02 03:04:05" : null,
+            state === "published" ? "Private review note" : null,
+          ),
+      ];
+    }),
+  );
+  const filters = { query: "CURSOR KEYWORD", tag: "paging", state: "pending" };
+  const first = await tool("review_queue", filters, "maintainer");
+  assert.equal(first.items.length, 20);
+  assert.equal(first.previousCursor, null);
+  assert.equal(first.items[0].id, sampleIds[24]);
+  assert.equal(first.items[0].files, undefined);
+  assert.match(first.nextCursor, /^next\|/u);
+  const second = await tool("review_queue", { ...filters, cursor: first.nextCursor }, "maintainer");
+  assert.equal(second.items.length, 5);
+  assert.equal(second.nextCursor, null);
+  assert.equal(new Set([...first.items, ...second.items].map(({ id }) => id)).size, 25);
+  const previous = await tool(
+    "review_queue",
+    { ...filters, cursor: second.previousCursor },
+    "maintainer",
+  );
+  assert.deepEqual(previous, first);
+  const path = "/api/queue?" + new URLSearchParams({ ...filters, limit: "4" });
+  const filtered = await (await dispatch(path, "maintainer")).json();
+  assert.equal(filtered.items.length, 4);
+  assert.equal((await dispatch(path, "author")).status, 403);
+  for (const params of ["limit=51", "limit=0", "cursor=malformed", "state=published"]) {
+    assert.equal((await dispatch("/api/queue?" + params, "maintainer")).status, 400);
+  }
+  const denied = await dispatch("/mcp", "author", {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "review_queue", arguments: filters },
+  });
+  assert.equal((await denied.json()).result.isError, true);
+  const authored = await tool("my_revisions", { query: "paging keyword", limit: 1 });
+  assert.equal(authored.items.length, 1);
+  assert.equal(typeof authored.nextCursor, "string");
+  const publicPage = await tool("search_recipes", { query: "paging keyword", limit: 1 }, "reader");
+  assert.equal(publicPage.items.length, 1);
+  assert.equal(publicPage.items[0].removal_reason, undefined);
+  assert.equal(publicPage.nextCursor, null);
+  const removal = await tool("review_queue", { ...filters, state: "removal" }, "maintainer");
+  assert.deepEqual(
+    removal.items.map(({ id }) => id),
+    [sampleIds.at(-1)],
+  );
   console.log(
     JSON.stringify({
       passed:

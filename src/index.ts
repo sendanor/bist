@@ -11,6 +11,15 @@ interface Env {
   MAINTAINER_EMAILS?: string;
 }
 const string = { type: "string" };
+const listing = {
+  query: { type: "string", maxLength: 160 },
+  tag: { type: "string", maxLength: 32 },
+  limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+  cursor: {
+    type: "string",
+    description: "A nextCursor or previousCursor from the same filtered list.",
+  },
+};
 const files = Object.fromEntries(
   ["source", "interface", "tests", "documentation", "instructions", "styles"].map((key) => [
     key,
@@ -32,8 +41,8 @@ const tool = (name: string, description: string, properties: Input, required: st
 const tools = [
   tool(
     "search_recipes",
-    "Find published recipes and guides by purpose or tag. Returns summaries without files.",
-    { query: string, tag: string },
+    "Find one page of published recipe summaries. Read items and use nextCursor or previousCursor to continue.",
+    listing,
   ),
   tool(
     "get_recipe",
@@ -73,7 +82,16 @@ const tools = [
     },
     ["slug", "title", "summary", "files"],
   ),
-  tool("my_revisions", "List your recent recipe revisions and their review statuses.", {}),
+  tool(
+    "my_revisions",
+    "List one page of your recipe revisions. Use nextCursor or previousCursor to continue.",
+    listing,
+  ),
+  tool(
+    "review_queue",
+    "List one page of the maintainer review queue. Filter by keyword, tag, or status. Use nextCursor or previousCursor to continue.",
+    { ...listing, state: { enum: ["pending", "approved", "quarantined", "removal"] } },
+  ),
 ];
 const headers = {
   "cache-control": "no-store",
@@ -196,7 +214,10 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
         value = await cookbook.submit(input);
         break;
       case "my_revisions":
-        value = await cookbook.queue(true);
+        value = await cookbook.queue(input, true);
+        break;
+      case "review_queue":
+        value = await cookbook.queue(input, false);
         break;
       default:
         return fail(-32602, "Unknown tool.");
@@ -271,9 +292,9 @@ export default {
           case "/api/recipe":
             return json(await cookbook.get(input, input.reviewComments === "1"));
           case "/api/mine":
-            return json(await cookbook.queue(true));
+            return json(await cookbook.queue(input, true));
           case "/api/queue":
-            return json(await cookbook.queue(false));
+            return json(await cookbook.queue(input, false));
         }
       }
       if (request.method === "POST") {

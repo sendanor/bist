@@ -164,6 +164,59 @@ function duplicateCheck(
 }
 
 const fields = "v.id, v.slug, v.title, v.summary, v.tags, v.state, v.created, v.published_at";
+const reviewScope =
+  "v.state IN ('pending','approved','quarantined') OR (v.removal_reason IS NOT NULL AND v.state != 'removed')";
+const reviewStates: Readonly<Record<string, string>> = {
+  pending: "v.state = 'pending'",
+  approved: "v.state = 'approved'",
+  quarantined: "v.state = 'quarantined'",
+  removal: "v.removal_reason IS NOT NULL",
+};
+
+type PageDirection = "next" | "previous";
+
+/**
+ * Read a bounded page size and validate an optional cursor from a prior response.
+ * @param input The pagination parameters from the API or MCP client.
+ * @throws {RequestError} When the page size or cursor has an invalid format.
+ */
+function pageOptions(input: Input) {
+  const rawLimit = input.limit ?? 20;
+  const limit =
+    typeof rawLimit === "string" && /^\d{1,2}$/u.test(rawLimit) ? Number(rawLimit) : rawLimit;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new RequestError("Page size must be an integer from 1 to 50.");
+  }
+  const token = str(input.cursor, "page cursor", 120, true);
+  if (!token) {
+    return { limit, cursor: null };
+  }
+  const [direction, time, id, ...extra] = token.split("|");
+  if (
+    extra.length ||
+    (direction !== "next" && direction !== "previous") ||
+    !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(time ?? "") ||
+    !isRevisionId(id)
+  ) {
+    throw new RequestError("Invalid page cursor. Restart from the first page.");
+  }
+  return { limit, cursor: { direction, time, id } };
+}
+
+/** Database fields identifying a boundary between two listing pages. */
+interface PageBoundary {
+  readonly sort_time: string;
+  readonly id: string;
+}
+
+/**
+ * Build a cursor from the first or last revision on the page.
+ * @param direction Which side of the boundary to read.
+ * @param row The boundary revision, if another page is available.
+ */
+function pageCursor(direction: PageDirection, row: PageBoundary | undefined) {
+  return row ? `${direction}|${row.sort_time}|${row.id}` : null;
+}
 /**
  * Decode stored revision tags before exposing them to API readers.
  * @param json JSON text persisted when a revision was submitted.
@@ -359,53 +412,95 @@ export class Cookbook {
     return { policy, prettierOptions, eslintRules, qualityOptions };
   }
   /**
-   * Find published recipes that match the requested terms and tag.
-   * @param input The search options received from the API or MCP client.
-   * @throws {RequestError} When the search supplies more than twelve terms.
+   * Find one page of published recipes matching the requested terms and tag.
+   * @param input The search filters and cursor received from the API or MCP client.
    */
   async search(input: Input) {
+    return this.listPage(
+      input,
+      "JOIN recipes r ON r.slug = v.slug AND r.live = v.id",
+      "v.state = 'published' AND v.published_at IS NOT NULL",
+      [],
+      "published_at",
+    );
+  }
+  /**
+   * List one page of revisions for an author or maintainer.
+   * @param input The search filters and cursor received from the API or MCP client.
+   * @param mine Whether to limit results to the current author's own submissions.
+   */
+  async queue(input: Input, mine: boolean) {
+    if (!mine) {
+      this.maintainer();
+    }
+    const state = str(input.state, "review status", 32, true);
+    if (state && (mine || !Object.hasOwn(reviewStates, state))) {
+      throw new RequestError("Choose a supported review status.");
+    }
+    const scope = mine ? "v.author = ? AND v.state != 'removed'" : reviewScope;
+    return this.listPage(
+      input,
+      "",
+      state ? `(${scope}) AND ${reviewStates[state]}` : scope,
+      mine ? [this.user.id] : [],
+      "created",
+    );
+  }
+  /**
+   * Read a bounded page ordered by timestamp and revision ID.
+   * @param input The submitted search filters and pagination parameters.
+   * @param join The fixed SQL join required for the list's visibility scope.
+   * @param scope The fixed SQL visibility predicate for the selected list.
+   * @param bindings The values required by that visibility predicate.
+   * @param timestamp The column defining the list's primary sort order.
+   */
+  private async listPage(
+    input: Input,
+    join: string,
+    scope: string,
+    bindings: readonly string[],
+    timestamp: "published_at" | "created",
+  ) {
     const words = str(input.query, "search text", 160, true)
       .toLowerCase()
-      .split(/\s+/)
+      .split(/\s+/u)
       .filter(Boolean);
     if (words.length > 12) {
       throw new RequestError("Search supports up to 12 terms.");
     }
     const tag = str(input.tag, "tag", 32, true).toLowerCase();
-    const where = words.map(
-      () => "instr(lower(v.slug || ' ' || v.title || ' ' || v.summary || ' ' || v.tags), ?) > 0",
-    );
-    if (tag) {
-      where.push("EXISTS (SELECT 1 FROM json_each(v.tags) WHERE value = ?)");
-    }
-    const rows = await this.sql(
-      `SELECT ${fields} FROM recipes r
-      JOIN revisions v ON r.live = v.id WHERE v.state = 'published'
-      ${where.length ? "AND " + where.join(" AND ") : ""} ORDER BY v.published_at DESC, v.slug LIMIT 50`,
+    const { limit, cursor } = pageOptions(input);
+    const backwards = cursor?.direction === "previous";
+    const order = backwards ? "ASC" : "DESC";
+    const sort = `v.${timestamp}`;
+    const reviewFields = timestamp === "created" ? ", v.removal_reason" : "";
+    const where = [
+      ...words.map(
+        () => "instr(lower(v.slug || ' ' || v.title || ' ' || v.summary || ' ' || v.tags), ?) > 0",
+      ),
+      ...(tag ? ["EXISTS (SELECT 1 FROM json_each(v.tags) WHERE value = ?)"] : []),
+      ...(cursor ? [`(${sort}, v.id) ${backwards ? ">" : "<"} (?, ?)`] : []),
+    ];
+    const { results } = await this.sql(
+      `SELECT ${fields}${reviewFields}, ${sort} AS sort_time FROM revisions v ${join}
+       WHERE (${scope}) ${where.length ? "AND " + where.join(" AND ") : ""}
+       ORDER BY ${sort} ${order}, v.id ${order} LIMIT ?`,
+      ...bindings,
       ...words,
       ...(tag ? [tag] : []),
-    ).all<Revision>();
-    return rows.results.map(clean);
-  }
-  /**
-   * List visible revisions for author or maintainer workflows.
-   * @param mine Whether to limit results to the current author's own submissions.
-   */
-  async queue(mine: boolean) {
-    if (!mine) {
-      this.maintainer();
+      ...(cursor ? [cursor.time, cursor.id] : []),
+      limit + 1,
+    ).all<Revision & { sort_time: string }>();
+    const page = results.slice(0, limit);
+    if (backwards) {
+      page.reverse();
     }
-    const rows = await this.sql(
-      `SELECT ${fields}, v.removal_reason FROM revisions v
-      WHERE ${
-        mine
-          ? "v.author = ? AND v.state != 'removed'"
-          : "v.state IN ('pending','approved','quarantined') OR (v.removal_reason IS NOT NULL AND v.state != 'removed')"
-      }
-      ORDER BY v.created DESC, v.rowid DESC LIMIT 100`,
-      ...(mine ? [this.user.id] : []),
-    ).all<Revision>();
-    return rows.results.map(clean);
+    const more = results.length > limit;
+    return {
+      items: page.map(({ sort_time: _sortTime, ...row }) => clean(row)),
+      previousCursor: pageCursor("previous", (backwards ? more : cursor) ? page[0] : undefined),
+      nextCursor: pageCursor("next", (backwards ? cursor : more) ? page.at(-1) : undefined),
+    };
   }
   /**
    * Retrieve a visible recipe snapshot and optionally include review metadata.

@@ -2,6 +2,11 @@
 
 ## Edit and review
 
+**Review queue** shows up to 20 revisions per page, newest first. Filter by keyword, tag,
+or review status, then use **Previous page** and **Next page**. Search matches the slug,
+title, summary, and tags. The URL retains the filters and page when shared with another
+maintainer.
+
 A recipe can include any combination of `source`, `interface`, `tests`, `styles`,
 `documentation`, and `instructions`. Include at least one non-empty part. Each part has a
 12,000 UTF-8 byte limit, and a JSON request has a 96,000 byte limit.
@@ -35,6 +40,15 @@ connection. The repository does not distribute connection credentials. See the
   Set `replace` and the current `editVersion` to edit a draft. Set `base` to create a
   new revision from an existing one.
 - `my_revisions` lists your submissions and their review statuses.
+- `review_queue` lists revisions awaiting maintainer action. It accepts the keyword
+  `query`, a `tag`, and the optional `state` filter (`pending`, `approved`, `quarantined`,
+  or `removal`).
+
+List tools return an object with `items`, `nextCursor`, and `previousCursor`. They default
+to 20 summaries and accept a `limit` from 1 to 50. To continue, send the returned cursor as
+`cursor` with the same filters and limit. A null cursor indicates the end in that direction.
+Omit the cursor when changing filters. Listings return metadata only. Use `get_recipe` with
+selected `parts` for file content.
 
 Duplicate checks consider your active revisions and published recipes. Code is compared as a
 whole snapshot, while documentation and agent instructions are checked separately.

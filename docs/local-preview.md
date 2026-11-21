@@ -75,6 +75,6 @@ curl --fail --silent --show-error http://127.0.0.1:8787/mcp \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_recipes","arguments":{"query":"batch"}}}'
 ```
 
-The JSON-RPC result includes a text item containing the recipe summary as JSON. Look for
-the slug `batch-items`. The preview injects the synthetic identity for this request too.
+The JSON-RPC result includes a text item containing a JSON page. Look for the slug
+`batch-items` in `items`. The preview injects the synthetic identity for this request too.
 Hosted clients need authorized access to their own instance.
