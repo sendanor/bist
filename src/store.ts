@@ -544,7 +544,7 @@ export class Cookbook {
   }
 
   /**
-   * Find one page of published recipes matching the requested terms and tag.
+   * Find one page of published recipes matching the requested keywords and tags.
    * @param input The search filters and cursor received from the API or MCP client.
    */
   async search(input: Input) {
@@ -602,7 +602,20 @@ export class Cookbook {
     if (words.length > 12) {
       throw new RequestError("Search supports up to 12 terms.");
     }
-    const tag = str(input.tag, "tag", 32, true).toLowerCase();
+    const tag = str(input.tag, "tag", 32, true);
+    const requestedTags = input.tags ?? [];
+    if (!isArray(requestedTags) || requestedTags.length > 8) {
+      throw new RequestError("Search supports up to eight tags.");
+    }
+    const tags = [
+      ...new Set([
+        ...requestedTags.map((value) => str(value, "tag", 32, true).toLowerCase()),
+        tag.toLowerCase(),
+      ]),
+    ].filter(Boolean);
+    if (tags.length > 8) {
+      throw new RequestError("Search supports up to eight tags.");
+    }
     const { limit, cursor } = pageOptions(input);
     const backwards = cursor?.direction === "previous";
     const order = backwards ? "ASC" : "DESC";
@@ -612,7 +625,7 @@ export class Cookbook {
       ...words.map(
         () => "instr(lower(v.slug || ' ' || v.title || ' ' || v.summary || ' ' || v.tags), ?) > 0",
       ),
-      ...(tag ? ["EXISTS (SELECT 1 FROM json_each(v.tags) WHERE value = ?)"] : []),
+      ...tags.map(() => "EXISTS (SELECT 1 FROM json_each(v.tags) WHERE value = ?)"),
       ...(cursor ? [`(${sort}, v.id) ${backwards ? ">" : "<"} (?, ?)`] : []),
     ];
     const { results } = await this.sql(
@@ -621,7 +634,7 @@ export class Cookbook {
        ORDER BY ${sort} ${order}, v.id ${order} LIMIT ?`,
       ...bindings,
       ...words,
-      ...(tag ? [tag] : []),
+      ...tags,
       ...(cursor ? [cursor.time, cursor.id] : []),
       limit + 1,
     ).all<Revision & { sort_time: string }>();

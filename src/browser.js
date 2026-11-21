@@ -179,14 +179,26 @@ function chip(text, style = "") {
 }
 
 /**
- * Link to the first page of recipes with this tag in the current list.
+ * Toggle this exact tag while keeping the other filters in the current list.
  * @param tag The exact tag used by the listing filter.
  * @param section The library, personal revisions, or review queue.
+ * @param filters The current text, tags, and review status.
  */
-function tagLink(tag, section) {
+function tagLink(tag, section, filters) {
+  const selected = filters.getAll("tag").includes(tag);
+  const next = new URLSearchParams(filters);
+  if (selected) {
+    next.delete("tag", tag);
+  } else {
+    next.append("tag", tag);
+  }
   return el(
     "a",
-    { className: "chip tag-link", href: listingPath(section, new URLSearchParams({ tag })) },
+    {
+      className: selected ? "chip tag-link tag-selected" : "chip tag-link",
+      href: listingPath(section, next),
+      ...(selected ? { "aria-label": t("remove-tag") + " " + tag } : {}),
+    },
     tag,
   );
 }
@@ -195,8 +207,9 @@ function tagLink(tag, section) {
  * Render links for a list of recipe revision summaries.
  * @param rows The ordered revision summaries to display.
  * @param section The navigation section providing the back-link context.
+ * @param filters The currently applied listing filters.
  */
-function list(rows, section) {
+function list(rows, section, filters) {
   return el(
     "div",
     { className: section === "review" ? "list review-list" : "list" },
@@ -208,7 +221,7 @@ function list(rows, section) {
         el("p", { className: "muted" }, row.summary),
         chip(stateLabels[row.state] ?? row.state, "state-" + row.state),
         row.removal_reason && chip(t("removal-requested-label")),
-        ...row.tags.map((tag) => tagLink(tag, section)),
+        ...row.tags.map((tag) => tagLink(tag, section, filters)),
       ),
     ),
   );
@@ -223,15 +236,88 @@ function list(rows, section) {
 function listingPath(section, filters, cursor) {
   const params = new URLSearchParams();
   for (const name of ["query", "tag", "state"]) {
-    const value = filters.get(name)?.trim();
-    if (value) {
-      params.set(name, value);
+    for (const value of new Set(
+      filters
+        .getAll(name)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    )) {
+      params.append(name, value);
     }
   }
   if (cursor) {
     params.set("cursor", cursor);
   }
   return "/" + section + (params.size ? "?" + params : "");
+}
+
+/**
+ * Format an exact tag for the shared search field, quoting spaces or punctuation as needed.
+ * @param tag The stored tag name.
+ */
+function tagTerm(tag) {
+  return "tag:" + (/[\s"\\]/u.test(tag) ? JSON.stringify(tag) : tag);
+}
+
+/**
+ * Split typed tag terms from keywords and keep other submitted listing filters.
+ * @param form The search form fields or intermediate search parameters.
+ */
+function searchFilters(form) {
+  const filters = new URLSearchParams(form);
+  const input = filters.get("query") ?? "";
+  const query = input.replace(
+    /(?<!\S)tag:("(?:[^"\\]|\\(?:["\\/bfnrt]|u[\da-f]{4}))*"(?=\s|$)|[^\s"]+)/giu,
+    (term, value) => {
+      try {
+        const tag = value.startsWith('"') ? JSON.parse(value) : value;
+        filters.append("tag", tag.trim().toLowerCase());
+        return "";
+      } catch {
+        return term;
+      }
+    },
+  );
+  filters.set("query", query.trim().replace(/\s+/gu, " "));
+  return filters;
+}
+
+/**
+ * Build the shared keyword and tag input with suggestions for the tag currently being typed.
+ * @param label The accessible search field label.
+ * @param filters The active keyword and tag filters.
+ * @param tags The available tag suggestions in this section.
+ */
+function listingSearchField(label, filters, tags) {
+  const suggestions = el("datalist", { id: "filter-tags" });
+  const input = el("input", {
+    name: "query",
+    type: "search",
+    placeholder: t("search-keywords-and-tags"),
+    maxlength: 720,
+    list: suggestions.id,
+  });
+  input.value = [filters.get("query"), ...filters.getAll("tag").map(tagTerm)]
+    .filter(Boolean)
+    .join(" ");
+  /**
+   * Suggest full queries so selecting a tag preserves all earlier keywords and tags.
+   */
+  function updateSuggestions() {
+    const partial = input.value.match(/(?:^|\s)(tag:[^\s"]*)$/iu)?.[1];
+    const prefix = partial ? input.value.slice(0, -partial.length) : input.value.trimEnd() + " ";
+    const selected = searchFilters(new URLSearchParams({ query: prefix })).getAll("tag");
+    suggestions.replaceChildren(
+      ...tags
+        .filter((tag) => !selected.includes(tag))
+        .map(tagTerm)
+        .filter((term) => term.toLowerCase().startsWith(partial?.toLowerCase() ?? ""))
+        .map((term) => el("option", { value: (prefix.trim() ? prefix : "") + term })),
+    );
+  }
+  input.addEventListener("input", updateSuggestions);
+  updateSuggestions();
+  return el("label", {}, label, input, suggestions);
 }
 
 /**
@@ -263,22 +349,14 @@ function listingForm(section, filters, tags) {
        */
       onsubmit: (event) => {
         event.preventDefault();
-        navigate(listingPath(section, new FormData(event.currentTarget)));
+        navigate(listingPath(section, searchFilters(new FormData(event.currentTarget))));
       },
     },
-    field(
-      "query",
+    listingSearchField(
       section === "library" ? t("search-recipes") : t("search-revisions"),
-      { type: "search", placeholder: t("search-by-purpose-or-keyword"), maxlength: 160 },
-      filters.get("query") ?? "",
+      filters,
+      tags,
     ),
-    field(
-      "tag",
-      t("tag"),
-      { placeholder: t("e-g-utilities"), maxlength: 32, list: "filter-tags" },
-      filters.get("tag") ?? "",
-    ),
-    el("datalist", { id: "filter-tags" }, ...tags.map((tag) => el("option", { value: tag }))),
     review && el("label", {}, t("status"), status),
     el(
       "div",
@@ -334,7 +412,7 @@ async function listingPage(section) {
     title(labels[section], descriptions[section]),
     listingForm(section, filters, tags),
     items.length
-      ? list(items, section)
+      ? list(items, section, filters)
       : empty(
           active || cursor ? t("no-matching-recipes") : emptyLabels[section],
           active || cursor ? "" : emptyDetails[section],
@@ -1540,6 +1618,7 @@ async function recipePage(section, slug, revision) {
     }
   }
   recentRecipe = recipe;
+  const filters = new URL(listingPaths.get(section) ?? "/" + section, location.origin).searchParams;
   return {
     actions: revisionControls(recipe, section),
     toolbarTitle: recipe.title,
@@ -1552,7 +1631,7 @@ async function recipePage(section, slug, revision) {
           "div",
           { className: "recipe-byline" },
           chip(stateLabels[recipe.state] ?? recipe.state, "state-" + recipe.state),
-          ...recipe.tags.map((tag) => tagLink(tag, section)),
+          ...recipe.tags.map((tag) => tagLink(tag, section, filters)),
         ),
       ),
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),

@@ -1176,6 +1176,27 @@ describe("hasFields", () => {
   const filtered = await (await dispatch(path, "maintainer")).json();
   assert.equal(filtered.items.length, 4);
   assert.equal((await dispatch(path, "author")).status, 403);
+  const multiTagPath = "/api/queue?query=cursor+keyword&tag=PAGING&tag=draft-only&state=pending";
+  const multiTagPage = await (await dispatch(multiTagPath, "maintainer")).json();
+  assert.deepEqual(
+    multiTagPage.items.map(({ id }) => id),
+    [sampleIds[0]],
+  );
+  const disjointTags = await tool(
+    "review_queue",
+    { ...filters, tags: ["draft-only", "public-only"] },
+    "maintainer",
+  );
+  assert.deepEqual(disjointTags.items, []);
+  const publicMultiTag = await tool(
+    "search_recipes",
+    { query: "paging keyword", tags: ["paging", "public-only"] },
+    "reader",
+  );
+  assert.deepEqual(
+    publicMultiTag.items.map(({ id }) => id),
+    [sampleIds.at(-1)],
+  );
   for (const params of ["limit=51", "limit=0", "cursor=malformed", "state=published"]) {
     assert.equal((await dispatch("/api/queue?" + params, "maintainer")).status, 400);
   }

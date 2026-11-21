@@ -33,6 +33,12 @@ const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
   tag: { type: "string", maxLength: 32 },
+  tags: {
+    type: "array",
+    maxItems: 8,
+    items: { type: "string", maxLength: 32 },
+    description: "Require every listed tag. Combine with query to also match keywords.",
+  },
   limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
   cursor: {
     type: "string",
@@ -115,7 +121,7 @@ const tools = [
   ),
   tool(
     "review_queue",
-    "List one page of the maintainer review queue. Filter by keyword, tag, or status. Use nextCursor or previousCursor to continue.",
+    "List one page of the maintainer review queue. Filter by keywords, tags, or status. Use nextCursor or previousCursor to continue.",
     { ...listing, state: { enum: ["pending", "approved", "quarantined", "removal"] } },
   ),
 ];
@@ -423,6 +429,7 @@ export default {
       }
       if (request.method === "GET") {
         const input = Object.fromEntries(url.searchParams);
+        const filters = { ...input, tag: undefined, tags: url.searchParams.getAll("tag") };
         switch (url.pathname) {
           case "/api/settings":
             return json(await cookbook.codeSettings());
@@ -439,15 +446,15 @@ export default {
             return json(await fetchOpenAiModelCatalog(key));
           }
           case "/api/search":
-            return json(await cookbook.search(input));
+            return json(await cookbook.search(filters));
           case "/api/tags":
             return json(await cookbook.tags(input.scope));
           case "/api/recipe":
             return json(await cookbook.get(input, input.reviewComments === "1"));
           case "/api/mine":
-            return json(await cookbook.queue(input, true));
+            return json(await cookbook.queue(filters, true));
           case "/api/queue":
-            return json(await cookbook.queue(input, false));
+            return json(await cookbook.queue(filters, false));
         }
       }
       if (request.method === "POST") {
