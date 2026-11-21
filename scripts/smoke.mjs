@@ -1197,6 +1197,18 @@ describe("hasFields", () => {
     publicMultiTag.items.map(({ id }) => id),
     [sampleIds.at(-1)],
   );
+  for (const query of ["", "?query=++", "?tag=paging&tag=public-only"]) {
+    const response = await dispatch("/api/search" + query, "reader");
+    assert.equal(response.status, 200);
+    const page = await response.json();
+    assert.deepEqual(
+      page.items.map(({ id }) => id),
+      [sampleIds.at(-1)],
+    );
+  }
+  const unfilteredQueue = await (await dispatch("/api/queue", "maintainer")).json();
+  assert.equal(unfilteredQueue.items.length, 20);
+  assert.match(unfilteredQueue.nextCursor, /^next\|/u);
   for (const params of ["limit=51", "limit=0", "cursor=malformed", "state=published"]) {
     assert.equal((await dispatch("/api/queue?" + params, "maintainer")).status, 400);
   }

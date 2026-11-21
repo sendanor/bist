@@ -338,7 +338,8 @@ function listingForm(section, filters, tags) {
     el("option", { value: "removal" }, t("removal-requested-label")),
   );
   status.value = filters.get("state") ?? "";
-  const active = filters.get("query") || filters.get("tag") || filters.get("state");
+  const active =
+    filters.get("query") || filters.get("tag") || filters.get("state") || filters.get("cursor");
   return el(
     "form",
     {
@@ -362,7 +363,11 @@ function listingForm(section, filters, tags) {
       "div",
       { className: "list-filter-actions" },
       el("button", { className: "primary" }, t("search")),
-      active && buttonLink(t("clear-filters"), "/" + section),
+      active &&
+        buttonLink(
+          section === "library" ? t("show-all-recipes") : t("show-all-revisions"),
+          "/" + section,
+        ),
     ),
   );
 }
@@ -394,7 +399,7 @@ async function listingPage(section) {
   const tags = await suggestions;
   const active = filters.get("query") || filters.get("tag") || filters.get("state");
   const descriptions = {
-    library: t("find-recipes-and-guides"),
+    library: t("browse-published-recipes"),
     mine: t("track-your-submissions-and-review-feedback"),
     review: t("inspect-changes-record-a-decision-and-publish-approved"),
   };

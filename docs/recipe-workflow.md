@@ -2,6 +2,9 @@
 
 ## Edit and review
 
+**Recipe library** shows published recipes. Leave the search field empty to browse all of
+them, or select **Show all recipes** to clear a search.
+
 **Review queue** shows up to 20 revisions per page, newest first. Filter by keyword, tag,
 or review status, then use **Previous page** and **Next page**. Search matches the slug,
 title, summary, and tags. The URL retains the filters and page when shared with another
@@ -11,7 +14,7 @@ Click a tag on a recipe or in a result list to add it to the current search. Cli
 selected tag again to remove it. You can also type keywords and tags in the same field,
 for example `storage tag:architecture tag:typescript`. Quote a tag that contains spaces,
 as in `tag:"code review"`. Results must match every keyword and every selected tag.
-Search supports up to eight tags.
+A keyword is optional. Search supports up to eight tags.
 
 A recipe can include any combination of `source`, `interface`, `tests`, `styles`,
 `documentation`, and `instructions`. Include at least one non-empty part. Each part has a
