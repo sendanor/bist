@@ -17,6 +17,32 @@ This README describes the source in the `develop` branch. Hosted instances may r
 version. Recipe tests are stored and checked as text. Run them in the project where you reuse
 the code.
 
+## Install a private instance with ChatGPT Sites
+
+If your ChatGPT account has access to Sites, you can deploy Bist from the public
+`sendanor/bist` GitHub repository and connect it as a private MCP plugin for ChatGPT and
+Codex in the ChatGPT desktop app. In ChatGPT on the web or in the desktop app, select
+`@Sites` and send a prompt like this. [ChatGPT Sites documentation](https://learn.chatgpt.com/docs/sites/creating-a-site)
+
+```text
+@Sites Deploy Bist (Code Cookbook) from the develop branch of
+https://github.com/sendanor/bist as a new private ChatGPT Site. Use the existing
+application and build instructions. Set up the D1 database binding named DB and
+apply the repository migrations. Ask me which verified ChatGPT email should be a
+maintainer and set MAINTAINER_EMAILS in the Sites runtime settings.
+Publish with access limited to my account and MCP enabled. Give me the Site URL
+and help me install and connect its private Code Cookbook plugin for ChatGPT and Codex.
+```
+
+After the Site owner publishes it, open the plugin card Sites provides. If needed, find
+**Code Cookbook** under **Plugins → Personal → Created by you**, then choose **Install**
+and **Connect** as prompted. In a new ChatGPT or Codex conversation, select the plugin and
+ask it to list your recipe revisions. An empty list is expected on a fresh instance.
+[ChatGPT MCP installation guide](https://learn.chatgpt.com/docs/extend/mcp#3-publish-and-install)
+
+If Sites needs a local copy of the source, clone the repository using the command below
+and use the checkout as the source project in the ChatGPT desktop app.
+
 ## Try it locally
 
 You need Git, Bash, Node.js 24 with npm, and access to the npm registry. The local preview uses test
