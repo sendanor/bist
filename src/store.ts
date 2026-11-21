@@ -64,6 +64,18 @@ export interface SubmissionSnapshot {
 /** Check a normalized submission before its storage transaction. */
 export type SubmissionReview = (candidate: SubmissionSnapshot) => Promise<readonly LlmFinding[]>;
 
+/** Advisory result for the current edit of a stored revision. */
+export interface RevisionReviewReport {
+  readonly checkedParts: readonly Part[];
+  readonly warnings: readonly LlmFinding[];
+}
+
+/** Review the stored files for the signed-in maintainer. */
+type RevisionReview = (
+  actor: string,
+  files: SubmissionSnapshot["files"],
+) => Promise<RevisionReviewReport>;
+
 type Revision = {
   id: string;
   slug: string;
@@ -794,6 +806,34 @@ export class Cookbook {
         decodeFiles(row.file_names, parts),
       ),
     };
+  }
+
+  /**
+   * Run an advisory review on the specific stored edit open in a maintainer's browser.
+   * @param input Slug, revision ID and edit version displayed in the viewer.
+   * @param check Evaluate the retrieved files using the current instance policy.
+   * @throws {RequestError} When access is denied, the revision is missing or its edit changes.
+   */
+  async recheckRevision(input: Input, check: RevisionReview) {
+    this.maintainer();
+    const version = snapshotVersion(input.editVersion);
+    const revision = revisionId(input.revision, "revision ID");
+    const recipe = await this.get({ slug: input.slug, revision });
+    const stale = "This revision changed. Reload it before running the review again.";
+    if (recipe.editVersion !== version) {
+      throw new RequestError(stale, 409);
+    }
+    const report = await check(this.user.id, recipe.files);
+    const current = await this.sql(
+      "SELECT 1 FROM revisions WHERE id = ? AND slug = ? AND edit_version = ? AND state != 'removed'",
+      revision,
+      recipe.slug,
+      version,
+    ).first();
+    if (!current) {
+      throw new RequestError(stale, 409);
+    }
+    return report;
   }
 
   /**

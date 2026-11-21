@@ -7,7 +7,7 @@ import {
   readLlmReviewPolicy,
   saveLlmReviewPolicy,
 } from "./llm-review-settings.ts";
-import { reviewSubmission } from "./submission-review.ts";
+import { reviewSavedFiles, reviewSubmission } from "./submission-review.ts";
 import {
   docsMcpEnabled,
   enabledSkills,
@@ -46,7 +46,9 @@ interface Env {
   MAINTAINER_EMAILS?: string;
   SETTINGS_ENCRYPTION_KEY?: string;
 }
+const revisionRecheckPath = "/api/review/recheck";
 const openAiPaths = new Set([
+  revisionRecheckPath,
   "/api/assistant",
   "/api/assistant/models",
   "/api/settings/openai",
@@ -779,6 +781,13 @@ export default {
             reviewSubmission(env.DB, env.SETTINGS_ENCRYPTION_KEY, candidate),
           );
           return json(result, result.editVersion > 0 ? 200 : 201);
+        }
+        if (url.pathname === revisionRecheckPath) {
+          return json(
+            await cookbook.recheckRevision(await body(request), (actor, files) =>
+              reviewSavedFiles(env.DB, env.SETTINGS_ENCRYPTION_KEY, actor, files),
+            ),
+          );
         }
         if (url.pathname === "/api/comment") {
           return json(await cookbook.comment(await body(request)), 201);

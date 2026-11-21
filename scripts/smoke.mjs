@@ -1,6 +1,11 @@
 import { repositoryRecipe } from "./repository-recipes.mjs";
 import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
 import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
+import {
+  recheckCriterion,
+  reviewStoredFixture,
+  verifyRevisionRecheck,
+} from "../tests/revision-recheck.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1495,6 +1500,10 @@ describe("hasFields", () => {
         llmReviewCalls++;
         assert.equal(body.model, "gpt-6.2-sol");
         assert.equal(body.store, false);
+        if (body.instructions.includes(recheckCriterion)) {
+          assert.deepEqual(body.reasoning, { effort: "low" });
+          return reviewStoredFixture(body);
+        }
         if (body.reasoning?.effort === "medium") {
           assert.ok(
             body.instructions.includes(defaultReviewPolicy.rules.documentation.instruction),
@@ -1852,6 +1861,22 @@ describe("hasFields", () => {
   assert.equal(blockedResult.isError, true);
   assert.match(blockedResult.content[0].text, /LLM review blocked/u);
   assert.equal(llmReviewCalls, 3);
+  const draftCheck = await dispatch("/api/review/recheck", "maintainer", {
+    slug: reviewed.slug,
+    revision: reviewed.id,
+    editVersion: reviewed.editVersion,
+  });
+  assert.equal(draftCheck.status, 200);
+  assert.deepEqual((await draftCheck.json()).warnings, reviewed.llmWarnings);
+  assert.deepEqual(
+    await tool("get_recipe", { slug: reviewed.slug, revision: reviewed.id }, "maintainer"),
+    reviewed,
+  );
+  await verifyRevisionRecheck(
+    dispatch,
+    { slug: "paging-fixture-26", revision: sampleIds.at(-1) },
+    () => llmReviewCalls,
+  );
   assert.equal(
     (await dispatch(llmReviewPath, "maintainer", { ...llmRule, enabled: false })).status,
     200,

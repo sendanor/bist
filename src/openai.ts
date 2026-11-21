@@ -340,9 +340,9 @@ export async function runOpenAiAssistant(
   throw new OpenAiError(502);
 }
 
-/** One newly submitted part with the maintainer's criteria for that part. */
-export interface ReviewItem {
-  readonly part: string;
+/** One recipe file with the maintainer's criteria for that part. */
+export interface ReviewItem<Name extends string = string> {
+  readonly part: Name;
   readonly instruction: string;
   readonly content: string;
 }
@@ -353,7 +353,10 @@ export interface ReviewItem {
  * @param names Recipe file parts that must each have exactly one result.
  * @throws {OpenAiError} When the review response is malformed or incomplete.
  */
-function reviewFindings(output: readonly Record<string, unknown>[], names: readonly string[]) {
+function reviewFindings<Name extends string>(
+  output: readonly Record<string, unknown>[],
+  names: readonly Name[],
+) {
   const result: unknown = JSON.parse(answerText(output));
   if (!isRecord(result) || !isArray(result.results) || result.results.length !== names.length) {
     throw new OpenAiError(502);
@@ -378,13 +381,13 @@ function reviewFindings(output: readonly Record<string, unknown>[], names: reado
 /**
  * Check selected files with Structured Outputs and at most one approved MCP lookup.
  * @param config Server credentials, model, reasoning effort and optional reference lookup.
- * @param items Changed files and their respective policy instructions.
+ * @param items Selected recipe files and their respective policy instructions.
  * @param send Fetch implementation substitutable by integration tests.
  * @throws {OpenAiError} When response data or a requested MCP lookup is invalid or unavailable.
  */
-export async function runOpenAiReview(
+export async function runOpenAiReview<Name extends string>(
   config: OpenAiConfig,
-  items: readonly ReviewItem[],
+  items: readonly ReviewItem<Name>[],
   send: typeof fetch = fetch,
 ) {
   const signal = AbortSignal.timeout(45_000);
