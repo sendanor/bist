@@ -7,6 +7,8 @@ or review status, then use **Previous page** and **Next page**. Search matches t
 title, summary, and tags. The URL retains the filters and page when shared with another
 maintainer.
 
+Click a tag on a recipe or in a result list to see all matching results in that section.
+
 A recipe can include any combination of `source`, `interface`, `tests`, `styles`,
 `documentation`, and `instructions`. Include at least one non-empty part. Each part has a
 12,000 UTF-8 byte limit, and a JSON request has a 96,000 byte limit.

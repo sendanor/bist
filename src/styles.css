@@ -630,6 +630,16 @@ textarea.code-input {
   margin: 0 5px 4px 0;
 }
 
+.tag-link {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.tag-link:hover,
+.tag-link:focus-visible {
+  background: #e2ddfa;
+}
+
 .state-published {
   background: #e3f5ea;
   color: #245c40;

@@ -179,6 +179,19 @@ function chip(text, style = "") {
 }
 
 /**
+ * Link to the first page of recipes with this tag in the current list.
+ * @param tag The exact tag used by the listing filter.
+ * @param section The library, personal revisions, or review queue.
+ */
+function tagLink(tag, section) {
+  return el(
+    "a",
+    { className: "chip tag-link", href: listingPath(section, new URLSearchParams({ tag })) },
+    tag,
+  );
+}
+
+/**
  * Render links for a list of recipe revision summaries.
  * @param rows The ordered revision summaries to display.
  * @param section The navigation section providing the back-link context.
@@ -195,7 +208,7 @@ function list(rows, section) {
         el("p", { className: "muted" }, row.summary),
         chip(stateLabels[row.state] ?? row.state, "state-" + row.state),
         row.removal_reason && chip(t("removal-requested-label")),
-        ...row.tags.map((tag) => chip(tag)),
+        ...row.tags.map((tag) => tagLink(tag, section)),
       ),
     ),
   );
@@ -1539,7 +1552,7 @@ async function recipePage(section, slug, revision) {
           "div",
           { className: "recipe-byline" },
           chip(stateLabels[recipe.state] ?? recipe.state, "state-" + recipe.state),
-          recipe.tags.length > 0 && el("span", { className: "muted" }, recipe.tags.join(" · ")),
+          ...recipe.tags.map((tag) => tagLink(tag, section)),
         ),
       ),
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
