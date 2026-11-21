@@ -6,6 +6,10 @@ import { secretKinds } from "./secret-patterns.mjs";
 
 const run = promisify(execFile);
 
+/**
+ * Run a Git inspection command in the project repository.
+ * @param args The Git subcommand and its ordered arguments.
+ */
 async function git(...args) {
   try {
     const { stdout } = await run("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -15,10 +19,20 @@ async function git(...args) {
   }
 }
 
+/**
+ * Read the NUL-delimited list of paths selected by Git.
+ * @param args The Git command arguments that select candidate paths.
+ */
 async function candidatePaths(...args) {
   return (await git(...args)).split("\0").filter(Boolean);
 }
 
+/**
+ * Record secret findings without exposing matched values.
+ * @param path The path to cite in a finding.
+ * @param source The source label identifying where the contents came from.
+ * @param text The full file contents to scan.
+ */
 function check(path, source, text) {
   const name = basename(path);
   const kinds = secretKinds(text);

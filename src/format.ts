@@ -30,6 +30,10 @@ export const parts = [
 ] as const;
 export type Part = (typeof parts)[number];
 
+/**
+ * Keep diagnostic messages within the response's display budget.
+ * @param messages The complete list of findings in report order.
+ */
 function limitDiagnostics(messages: readonly string[]) {
   const visible = messages.slice(0, 20);
   if (messages.length > visible.length) {
@@ -38,7 +42,11 @@ function limitDiagnostics(messages: readonly string[]) {
   return visible;
 }
 
-/** Apply the maintainer's policy to authored recipe files before saving. */
+/**
+ * Apply the maintainer's policy to authored recipe files before saving.
+ * @param value The unvalidated snapshot with authored files by part.
+ * @param policy The effective lint and formatting policy for the revision.
+ */
 export async function normalizeFiles(value: unknown, policy: Policy = defaultCodePolicy) {
   if (!isRecord(value)) {
     throw new Error("Provide a files object.");
@@ -115,6 +123,11 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
         parsers: {
           typescript: {
             ...typescript.parsers.typescript,
+            /**
+             * Capture the TypeScript parse result while Prettier formats a part.
+             * @param text The recipe source passed to Prettier.
+             * @param options Parser options supplied by the formatter.
+             */
             async parse(
               text: string,
               options: Parameters<typeof typescript.parsers.typescript.parse>[1],
@@ -169,6 +182,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
       // without compiling schemas with dynamic code generation in the Worker.
       const lintAst = ast;
       linter.defineParser("cookbook-typescript", {
+        /** Pass the captured syntax and scope information to ESLint. */
         parseForESLint() {
           return {
             ast: lintAst,
@@ -196,6 +210,10 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
         },
         { filename: virtualFiles[part], allowInlineConfig: false },
       );
+      /**
+       * Format a lint diagnostic with its recipe part and location.
+       * @param message The lint finding emitted for the current part.
+       */
       const describe = (message: (typeof messages)[number]) =>
         `${key}:${message.line}:${message.column} ${message.message} (${message.ruleId ?? "parse"})`;
       for (const message of messages) {

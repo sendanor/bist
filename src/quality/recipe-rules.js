@@ -40,7 +40,15 @@ export const recipeRules = {
         },
       ],
     },
+    /**
+     * Register listeners that validate dependencies within a recipe snapshot.
+     * @param context The ESLint context with the authored recipe's file list and rule options.
+     */
     create(context) {
+      /**
+       * Validate a module specifier against available recipe parts and external allowances.
+       * @param node The module expression or fallback node used for the diagnostic.
+       */
       function inspect(node) {
         const path = node?.value;
         if (typeof path !== "string") {
@@ -79,26 +87,54 @@ export const recipeRules = {
         }
       }
       return {
+        /**
+         * Validate the dependency of a static import declaration.
+         * @param node The import declaration and its module path.
+         */
         ImportDeclaration(node) {
           inspect(node.source);
         },
+        /**
+         * Validate re-exports that name another module.
+         * @param node The export declaration that may name a source module.
+         */
         ExportNamedDeclaration(node) {
           if (node.source) {
             inspect(node.source);
           }
         },
+        /**
+         * Validate the dependency of a wildcard re-export.
+         * @param node The wildcard export and its source module.
+         */
         ExportAllDeclaration(node) {
           inspect(node.source);
         },
+        /**
+         * Require a verifiable path for a dynamic import.
+         * @param node The dynamic import and its source expression.
+         */
         ImportExpression(node) {
           inspect(node.source);
         },
+        /**
+         * Apply recipe import boundaries to TypeScript import types.
+         * @param node The TypeScript import type and its module reference.
+         */
         TSImportType(node) {
           inspect(node.source ?? node.argument?.literal ?? node.argument);
         },
+        /**
+         * Validate the path used by a TypeScript import assignment.
+         * @param node The external module reference and its path.
+         */
         TSExternalModuleReference(node) {
           inspect(node.expression);
         },
+        /**
+         * Validate dependencies loaded through CommonJS require calls.
+         * @param node The call expression whose callee may be require.
+         */
         CallExpression(node) {
           if (node.callee.name === "require") {
             inspect(node.arguments[0] ?? node);
@@ -109,8 +145,16 @@ export const recipeRules = {
   },
   "duplicate-code": {
     meta: { schema: [] },
+    /**
+     * Register the recipe token duplication check.
+     * @param context The ESLint context that provides tokens and diagnostics.
+     */
     create(context) {
       return {
+        /**
+         * Tokenize this part and report any repeated code ranges.
+         * @param node The syntax root of the current recipe part.
+         */
         Program(node) {
           const tokens = context.sourceCode.getTokens(node).map((token) => ({
             value: token.value,

@@ -14,14 +14,26 @@ const userCalls = new Map([
   ["el", 2],
 ]);
 
+/**
+ * Collect translatable strings and translation keys from browser source.
+ * @param ast The parsed browser module to inspect.
+ */
 export function browserCopy(ast) {
   const strings = [];
   const used = new Set();
+  /**
+   * Identify the name of a supported translation or DOM helper call.
+   * @param node The call node whose name is needed.
+   */
   function callName(node) {
     return ts.isCallExpression(node) && ts.isIdentifier(node.expression)
       ? node.expression.text
       : undefined;
   }
+  /**
+   * Inspect translatable values and visit child nodes recursively.
+   * @param node The current browser syntax node.
+   */
   function visit(node) {
     if (callName(node) === "t") {
       const key = node.arguments[0];
@@ -81,6 +93,10 @@ export function browserCopy(ast) {
 }
 
 const shellKey = /\{\{t:([a-z0-9-]+)\}\}/gu;
+/**
+ * Collect translation placeholders from the browser shell.
+ * @param html The HTML template before translation is applied.
+ */
 export function shellCopy(html) {
   const used = new Set([...html.matchAll(shellKey)].map((match) => match[1]));
   const source = html.replace(shellKey, "");
@@ -93,6 +109,7 @@ export function shellCopy(html) {
   return { used, raw };
 }
 
+/** Validate translation keys, placeholders, and visible source strings. */
 export async function checkTranslations() {
   const findings = [];
   const locales = new Map();
@@ -137,6 +154,10 @@ export async function checkTranslations() {
       findings.push(`Missing English translation for '${key}'. (i18n)`);
     }
   }
+  /**
+   * Collect a translation string's interpolation placeholders.
+   * @param text The source or translated message to examine.
+   */
   const placeholders = (text) =>
     [...text.matchAll(/\{[\w-]+\}/gu)]
       .map((match) => match[0])

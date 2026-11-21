@@ -2,6 +2,11 @@ import { isRecord } from "./guards.ts";
 
 export class JsonBodyError extends Error {
   readonly status: 400 | 413 | 415;
+  /**
+   * Construct a request body error with its HTTP response status.
+   * @param message The explanation safe to show to a client.
+   * @param status The client error status matching the failure.
+   */
   constructor(message: string, status: 400 | 413 | 415) {
     super(message);
     this.name = "JsonBodyError";
@@ -9,6 +14,13 @@ export class JsonBodyError extends Error {
   }
 }
 
+/**
+ * Read a UTF-8 JSON request body within a byte limit and require an object.
+ * @param request The incoming Fetch request whose body will be consumed.
+ * @param maxBytes The maximum number of encoded bytes to read.
+ * @throws {RangeError} When the byte limit is not a positive safe integer.
+ * @throws {JsonBodyError} When the body is missing, unreadable, oversized, invalid JSON, or has an unsupported content type.
+ */
 export async function readJsonObject(
   request: Request,
   maxBytes: number,
@@ -60,7 +72,10 @@ export async function readJsonObject(
   }
 }
 
-/** Request best-effort cancellation without replacing the original parse failure. */
+/**
+ * Request best-effort cancellation without replacing the original parse failure.
+ * @param reader The stream reader whose pending work should stop.
+ */
 async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>) {
   try {
     await reader.cancel();

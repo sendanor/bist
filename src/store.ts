@@ -10,13 +10,28 @@ import { normalizeFiles, parts } from "./format";
 import { sourceLines } from "./line-diff";
 import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
 export interface Statement {
+  /**
+   * Bind positional values to SQL parameters without string interpolation.
+   * @param values The ordered values for statement placeholders.
+   */
   bind(...values: unknown[]): Statement;
+  /** Execute the statement and return the first result or null. */
   first<T>(): Promise<T | null>;
+  /** Execute the statement and return all matching rows. */
   all<T>(): Promise<{ results: T[] }>;
+  /** Execute a mutation and expose its changed-row count. */
   run(): Promise<{ meta: { changes: number } }>;
 }
 export interface Database {
+  /**
+   * Prepare a SQL statement for later binding and execution.
+   * @param sql The SQL text with placeholders for dynamic data.
+   */
   prepare(sql: string): Statement;
+  /**
+   * Execute the supplied statements as a database batch.
+   * @param statements The prepared statements in their execution order.
+   */
   batch(statements: Statement[]): Promise<{ meta: { changes: number } }[]>;
 }
 export type User = { id: string; maintainer: boolean };
@@ -69,6 +84,13 @@ const matchingSnapshot = `
 `;
 
 class DuplicateCheck {
+  /**
+   * Record the fingerprints and policy needed for duplicate checks.
+   * @param code The code fingerprint, or null to skip code matching.
+   * @param documentation The documentation fingerprint, or null to skip documentation matching.
+   * @param instructions The instructions fingerprint, or null to skip instructions matching.
+   * @param policy The configured duplicate policy for each part.
+   */
   constructor(
     readonly code: string | null,
     readonly documentation: string | null,
@@ -76,10 +98,16 @@ class DuplicateCheck {
     readonly policy: typeof defaultCodePolicy.quality,
   ) {}
 
+  /** Return the fingerprints in the order required by the duplicate query. */
   bindings() {
     return [this.code, this.documentation, this.instructions];
   }
 
+  /**
+   * Explain which visible snapshots conflict with a pending submission.
+   * @param db The prepared statement that identifies matching part fingerprints.
+   * @throws {RequestError} When a matching part requires a warning acknowledgement or prevents the submission.
+   */
   async report(db: Statement) {
     const matches = await db.first<{ code: number; documentation: number; instructions: number }>();
     const summary: string[] = [];
@@ -109,11 +137,21 @@ class DuplicateCheck {
   }
 }
 
+/**
+ * Select the fingerprints that require duplicate checks under this policy.
+ * @param fingerprint The normalized fingerprints from the submitted snapshot.
+ * @param policy The configured severities for matching code and prose.
+ * @param allow Whether the author has acknowledged duplicate warnings.
+ */
 function duplicateCheck(
   fingerprint: RecipeFingerprint,
   policy: typeof defaultCodePolicy.quality,
   allow: boolean,
 ) {
+  /**
+   * Decide if the current attempt still needs a duplicate lookup.
+   * @param severity The configured severity for this kind of fingerprint.
+   */
   const check = (severity: string) => severity === "error" || (severity === "warn" && !allow);
   const code = check(policy.duplicateCode) ? fingerprint.snapshot : null;
   const prose = check(policy.duplicateProse);
@@ -183,6 +221,12 @@ function decodeFiles(json: string | null, selected: readonly (typeof parts)[numb
   );
 }
 export class RequestError extends Error {
+  /**
+   * Construct a request failure with its caller-facing status and optional code.
+   * @param message The message safe to include in the response.
+   * @param status The HTTP status for this failure.
+   * @param code The optional machine-readable code for duplicate warnings.
+   */
   constructor(
     message: string,
     public status = 400,
@@ -191,6 +235,14 @@ export class RequestError extends Error {
     super(message);
   }
 }
+/**
+ * Read and trim a text field while enforcing its length and presence.
+ * @param value The unvalidated input value for the field.
+ * @param name The label used in any request diagnostic.
+ * @param max The maximum length of the trimmed field.
+ * @param optional Whether an absent or blank string is accepted.
+ * @throws {RequestError} When a required field is missing or the supplied value is invalid.
+ */
 export function str(value: unknown, name: string, max: number, optional = false) {
   if (optional && value === undefined) {
     return "";
@@ -229,18 +281,36 @@ function snapshotVersion(value: unknown) {
 }
 
 export class Cookbook {
+  /**
+   * Bind recipe operations to a database and the current identity.
+   * @param db The database binding storing recipes and policy.
+   * @param user The identity and privileges of the current requester.
+   */
   constructor(
     private readonly db: Database,
     private readonly user: User,
   ) {}
+  /**
+   * Prepare a database statement and bind supplied positional values.
+   * @param query The SQL text containing any parameter placeholders.
+   * @param values The values corresponding to the placeholders in order.
+   */
   private sql(query: string, ...values: unknown[]) {
     return this.db.prepare(query).bind(...values);
   }
+  /**
+   * Require the current identity to have maintainer permissions.
+   * @throws {RequestError} When the current identity lacks maintainer access.
+   */
   private maintainer() {
     if (!this.user.maintainer) {
       throw new RequestError("Maintainer access required.", 403);
     }
   }
+  /**
+   * Read the stored recipe policy and apply settings defaults.
+   * @throws {Error} When stored settings do not form an object.
+   */
   private async readCodePolicy() {
     const row = await this.sql("SELECT config FROM code_policy WHERE id = 1").first<{
       config: string;
@@ -264,10 +334,15 @@ export class Cookbook {
       quality: saved.quality,
     });
   }
+  /** Return the effective code settings and supported rules for maintainers. */
   async codeSettings() {
     this.maintainer();
     return { policy: await this.readCodePolicy(), prettierOptions, eslintRules, qualityOptions };
   }
+  /**
+   * Validate and save a new code policy on behalf of a maintainer.
+   * @param input The proposed recipe settings from the request body.
+   */
   async saveCodeSettings(input: Input) {
     this.maintainer();
     const policy = (() => {
@@ -283,6 +358,11 @@ export class Cookbook {
     ).run();
     return { policy, prettierOptions, eslintRules, qualityOptions };
   }
+  /**
+   * Find published recipes that match the requested terms and tag.
+   * @param input The search options received from the API or MCP client.
+   * @throws {RequestError} When the search supplies more than twelve terms.
+   */
   async search(input: Input) {
     const words = str(input.query, "search text", 160, true)
       .toLowerCase()
@@ -307,6 +387,10 @@ export class Cookbook {
     ).all<Revision>();
     return rows.results.map(clean);
   }
+  /**
+   * List visible revisions for author or maintainer workflows.
+   * @param mine Whether to limit results to the current author's own submissions.
+   */
   async queue(mine: boolean) {
     if (!mine) {
       this.maintainer();
@@ -323,6 +407,11 @@ export class Cookbook {
     ).all<Revision>();
     return rows.results.map(clean);
   }
+  /**
+   * Retrieve a visible recipe snapshot and optionally include review metadata.
+   * @param input The slug, revision, and file parts requested by the client.
+   * @param includeReview Whether to include line comments and allowed actions when available.
+   */
   async get(input: Input, includeReview = false) {
     const slug = str(input.slug, "recipe slug", 64);
     const id = revisionId(input.revision, "revision ID", true);
@@ -441,6 +530,12 @@ export class Cookbook {
     }
     return saved;
   }
+  /**
+   * Format and lint a snapshot and translate diagnostics into request errors.
+   * @param files The unvalidated file parts supplied by the author.
+   * @param policy The effective policy controlling formatting and validation.
+   * @throws {RequestError} When a part exceeds its limits or fails validation.
+   */
   private async normalizeSubmission(files: unknown, policy: typeof defaultCodePolicy) {
     try {
       return await normalizeFiles(files, policy);
@@ -486,6 +581,11 @@ export class Cookbook {
     }
   }
 
+  /**
+   * Look up visible fingerprint collisions to explain a rejected write.
+   * @param check The fingerprints and severities used for matching.
+   * @param except The current revision ID to exclude when replacing a draft.
+   */
   private async explainDuplicate(check: DuplicateCheck, except: string | null) {
     if (check.bindings().every((hash) => hash === null)) {
       return;
@@ -508,6 +608,10 @@ export class Cookbook {
     );
   }
 
+  /**
+   * Submit or replace an unapproved revision after validation and duplicate checks.
+   * @param input The proposed recipe and revision operation received from the client.
+   */
   async submit(input: Input) {
     const slug = str(input.slug, "recipe slug", 64);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
@@ -618,6 +722,10 @@ export class Cookbook {
     }
     return { slug, id, state: "pending", editVersion, ...notices };
   }
+  /**
+   * Apply a review, publication, or removal action to a recipe revision.
+   * @param input The target revision, requested action, and accompanying review data.
+   */
   async action(input: Input) {
     const slug = str(input.slug, "recipe slug", 64);
     const id = revisionId(input.revision, "revision ID");

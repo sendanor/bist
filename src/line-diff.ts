@@ -1,5 +1,11 @@
 export type DiffLine = { before: string | null; after: string | null };
 
+/**
+ * Align two text versions while limiting the work on large diffs.
+ * @param before The previous text used as the baseline.
+ * @param after The current text to compare with the baseline.
+ * @param maxCells The largest dynamic-programming table to allocate.
+ */
 export function diffLines(before: string, after: string, maxCells = 250_000): DiffLine[] {
   const left = before.split("\n");
   const right = after.split("\n");
@@ -22,6 +28,11 @@ export function diffLines(before: string, after: string, maxCells = 250_000): Di
   const cells = (endLeft - start + 1) * width;
   if (endLeft > start && endRight > start && cells <= maxCells) {
     const lengths = new Uint32Array(cells);
+    /**
+     * Convert a pair of line offsets to a flat table position.
+     * @param x The line offset in the previous text.
+     * @param y The line offset in the current text.
+     */
     const index = (x: number, y: number) => (x - start) * width + y - start;
     for (let x = endLeft - 1; x >= start; x--) {
       for (let y = endRight - 1; y >= start; y--) {

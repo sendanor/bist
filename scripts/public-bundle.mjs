@@ -7,6 +7,11 @@ const privateMarkers = [
   /sourceMappingURL\s*=/u,
 ];
 
+/**
+ * Reject references that must remain outside the public bundle.
+ * @param text The built browser code to inspect.
+ * @throws {Error} When the browser code contains prohibited references.
+ */
 export function assertPublicBundle(text) {
   if (secretKinds(text).length) {
     throw new Error("Browser bundle contains a possible credential. Value omitted.");

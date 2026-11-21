@@ -16,6 +16,13 @@ const files = Object.fromEntries(
     string,
   ]),
 );
+/**
+ * Describe an MCP tool and its accepted argument object.
+ * @param name The public name registered for the MCP tool.
+ * @param description The tool purpose shown to MCP clients.
+ * @param properties The JSON Schema definitions for accepted arguments.
+ * @param required The argument keys required by the tool.
+ */
 const tool = (name: string, description: string, properties: Input, required: string[] = []) => ({
   name,
   description,
@@ -74,21 +81,44 @@ const headers = {
   "content-security-policy":
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'",
 };
+/**
+ * Return a JSON response with the Worker security headers.
+ * @param data The data to serialize into the response body.
+ * @param status The HTTP status sent with the response.
+ */
 function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers });
 }
+/**
+ * Return a built application asset with its content type.
+ * @param content The text of the generated browser asset.
+ * @param type The MIME type the browser should use.
+ */
 function asset(content: string, type: string) {
   return new Response(content, {
     headers: { ...headers, "content-type": type + "; charset=utf-8" },
   });
 }
+/**
+ * Require a plain JSON object before reading request fields.
+ * @param input The decoded request value to validate.
+ * @throws {RequestError} When the input is not an object.
+ */
 function object(input: unknown): Input {
   if (!isRecord(input)) {
     throw new RequestError("Expected a JSON object.");
   }
   return input;
 }
+/**
+ * Read a request body under the API's byte limit.
+ * @param request The incoming request carrying a JSON object.
+ */
 const body = (request: Request) => readJsonObject(request, 96_000);
+/**
+ * Extract a caller-facing message from a request failure.
+ * @param error The thrown value received from the handler.
+ */
 function message(error: unknown) {
   if (error instanceof RequestError || error instanceof JsonBodyError) {
     return error.message;
@@ -97,10 +127,24 @@ function message(error: unknown) {
   return "The operation failed. Please retry.";
 }
 
+/**
+ * Handle a JSON-RPC request against the MCP recipe tools.
+ * @param request The incoming MCP HTTP request.
+ * @param cookbook The recipe service for the caller, or null when signed out.
+ */
 async function mcp(request: Request, cookbook: Cookbook | null) {
   const rpc = await body(request);
   const { method, id = null } = rpc;
+  /**
+   * Return a JSON-RPC result with the request correlation ID.
+   * @param value The successful tool response payload.
+   */
   const result = (value: unknown) => json({ jsonrpc: "2.0", id, result: value });
+  /**
+   * Return a JSON-RPC error with the request correlation ID.
+   * @param code The numeric JSON-RPC error code.
+   * @param detail The human-readable failure message.
+   */
   const fail = (code: number, detail: string) =>
     json({ jsonrpc: "2.0", id, error: { code, message: detail } });
   if (rpc.jsonrpc !== "2.0" || !isString(method)) {
@@ -176,6 +220,11 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
 }
 
 export default {
+  /**
+   * Route application, API, and MCP traffic in the Worker.
+   * @param request The incoming HTTP request to handle.
+   * @param env The runtime deployment bindings for this Worker.
+   */
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
     try {

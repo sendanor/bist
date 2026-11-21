@@ -1,6 +1,10 @@
 const minimumLines = 12;
 const minimumTokens = 80;
 
+/**
+ * Index token ranges that satisfy the duplicate scan thresholds.
+ * @param tokens The lexical tokens with their original line locations.
+ */
 function eligibleLengths(tokens) {
   const lineStarts = [];
   const lines = tokens.map((token, index) => {
@@ -15,7 +19,11 @@ function eligibleLengths(tokens) {
   });
 }
 
-/** Find exact runs after ignoring comments and whitespace. Each file supplies ordered lexical tokens. */
+/**
+ * Find exact runs after ignoring comments and whitespace. Each file supplies ordered lexical tokens.
+ * @param files The named files and their ordered token sequences.
+ * @param limit The maximum number of duplicate findings to return.
+ */
 export function findDuplicates(files, limit = 20) {
   const windows = new Map();
   const duplicates = [];

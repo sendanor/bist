@@ -23,12 +23,17 @@ const testLibraries = [
 
 let cachedLibraries: Map<string, ts.SourceFile>;
 
+/** Load the pinned declaration library texts for the virtual compiler. */
 function loadLibraries() {
   cachedLibraries ??= new Map();
   return cachedLibraries;
 }
 
-/** Check a recipe snapshot using only the pinned standard libraries and its submitted files. */
+/**
+ * Check a recipe snapshot using only the pinned standard libraries and its submitted files.
+ * @param sources The authored TypeScript parts supplied to the virtual compiler.
+ * @param limit The diagnostic limit enforced for a single snapshot.
+ */
 export function checkRecipeTypes(sources: RecipeSources, limit: number): string[] {
   const files = new Map<string, ts.SourceFile>();
   for (const part of Object.keys(virtualFiles) as (keyof typeof virtualFiles)[]) {
@@ -40,6 +45,10 @@ export function checkRecipeTypes(sources: RecipeSources, limit: number): string[
   }
 
   const host: ts.CompilerHost = {
+    /**
+     * Find an authored or standard-library file in the virtual filesystem.
+     * @param name The absolute virtual filename requested by the compiler.
+     */
     getSourceFile(name) {
       const text = libraries[name];
       if (text === undefined) {
@@ -53,14 +62,35 @@ export function checkRecipeTypes(sources: RecipeSources, limit: number): string[
       }
       return file;
     },
+    /** Use the pinned ES2022 declaration file as the compiler default. */
     getDefaultLibFileName: () => "/lib.es2022.d.ts",
+    /** Discard writes because recipe checking only reports diagnostics. */
     writeFile: () => {},
+    /** Resolve all compiler paths relative to the virtual root. */
     getCurrentDirectory: () => "/",
+    /**
+     * Preserve filename spelling in the case-sensitive virtual filesystem.
+     * @param name The virtual filename to use as a cache key.
+     */
     getCanonicalFileName: (name) => name,
+    /** Treat differently cased virtual filenames as distinct. */
     useCaseSensitiveFileNames: () => true,
+    /** Use LF as the compiler's virtual newline. */
     getNewLine: () => "\n",
+    /**
+     * Check whether the virtual files include this path.
+     * @param name The virtual filename to check for availability.
+     */
     fileExists: (name) => files.has(name) || Object.hasOwn(libraries, name),
+    /**
+     * Read authored or pinned declarations without host filesystem access.
+     * @param name The virtual filename requested by the compiler.
+     */
     readFile: (name) => files.get(name)?.text ?? libraries[name],
+    /**
+     * Resolve permitted imports against the recipe's virtual files and pinned declarations.
+     * @param names The import specifiers requested by the compiler.
+     */
     resolveModuleNames(names) {
       return names.map((name) => {
         const part = resolveRecipePart(name);

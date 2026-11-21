@@ -69,6 +69,10 @@ await build({
   plugins: [
     {
       name: "cookbook-bundles",
+      /**
+       * Load the pinned TypeScript declaration files as bundled strings.
+       * @param builder The esbuild instance registering the declaration loader.
+       */
       setup(builder) {
         builder.onResolve({ filter: /^cookbook:typescript-libraries$/ }, () => ({
           path: "standard-libraries",
@@ -124,6 +128,10 @@ await build({
   ],
 });
 
+/**
+ * Reject source maps anywhere in the prepared public bundle.
+ * @param directory The output directory to scan recursively.
+ */
 async function rejectSourceMaps(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const target = join(directory, entry.name);

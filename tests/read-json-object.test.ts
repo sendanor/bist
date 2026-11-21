@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readJsonObject } from "../src/read-json-object.ts";
 
+/**
+ * Build a synthetic POST request for the JSON parser.
+ * @param body The body content used by the current test case.
+ * @param type The content type advertised by the request.
+ */
 const request = (body: BodyInit, type = "Application/JSON; charset=utf-8") =>
   new Request("https://example.test/", { method: "POST", headers: { "content-type": type }, body });
 const input = '{"city":"Tampere","word":"yö"}';
@@ -15,6 +20,10 @@ await assert.rejects(readJsonObject(request(new Uint8Array([0xff])), 100), { sta
 await assert.rejects(readJsonObject(request("{}", "text/plain"), 100), { status: 415 });
 
 const chunks = new ReadableStream<Uint8Array>({
+  /**
+   * Split a UTF-8 character between chunks to exercise streamed decoding.
+   * @param controller The stream controller used to push and close the chunks.
+   */
   start(controller) {
     const split = bytes.indexOf(0xc3) + 1;
     controller.enqueue(bytes.slice(0, split));

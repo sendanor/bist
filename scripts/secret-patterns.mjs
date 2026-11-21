@@ -10,6 +10,10 @@ const secretPatterns = [
   ],
 ];
 
+/**
+ * Return labels for credential patterns matched in text, omitting their values.
+ * @param text The file text to scan for credential patterns.
+ */
 export function secretKinds(text) {
   return secretPatterns.filter(([, expression]) => expression.test(text)).map(([kind]) => kind);
 }

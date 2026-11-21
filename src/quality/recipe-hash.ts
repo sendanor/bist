@@ -11,6 +11,10 @@ export interface RecipeFingerprint {
   readonly instructions: string | null;
 }
 
+/**
+ * Canonicalize a TypeScript part before fingerprinting its code.
+ * @param text The submitted code whose formatting should be ignored.
+ */
 function canonicalTypeScript(text: string) {
   let file = ts.createSourceFile("recipe.tsx", text, ts.ScriptTarget.Latest, true);
   if (
@@ -28,6 +32,10 @@ function canonicalTypeScript(text: string) {
     }
   }
   const entries: (number | string)[] = [];
+  /**
+   * Visit syntax nodes to preserve tokens that affect code meaning.
+   * @param node The TypeScript node at the current traversal position.
+   */
   function visit(node: ts.Node) {
     if (ts.isJSDoc(node)) {
       return;
@@ -67,6 +75,10 @@ function canonicalTypeScript(text: string) {
   return JSON.stringify([entries, directives]);
 }
 
+/**
+ * Compute a hexadecimal SHA-256 digest from UTF-8 text.
+ * @param value The normalized content to hash.
+ */
 async function digest(value: string) {
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -91,6 +103,10 @@ export async function fingerprintRecipe(
   const snapshot = Object.keys(units).length
     ? await digest(JSON.stringify(["bist-snapshot-v1", units]))
     : null;
+  /**
+   * Fingerprint a prose part if it contains nonblank text.
+   * @param text The optional Markdown text from the recipe snapshot.
+   */
   async function prose(text: string | undefined) {
     return text?.trim()
       ? digest(JSON.stringify(["bist-prose-v1", text.replace(/\r\n?/g, "\n").trimEnd()]))

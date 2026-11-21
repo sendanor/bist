@@ -22,6 +22,10 @@ const tsOptions = {
   resolveJsonModule: true,
 };
 
+/**
+ * Classify a source file for import boundary checks.
+ * @param file The project-relative path to classify.
+ */
 function layer(file) {
   const path = relative(sourceRoot, file);
   if (baseFiles.has(path)) {
@@ -54,6 +58,10 @@ const allowedLayers = {
   asset: ["asset"],
 };
 
+/**
+ * Check whether the filesystem path is a regular file.
+ * @param path The candidate file path to inspect.
+ */
 async function fileExists(path) {
   try {
     await lstat(path);
@@ -63,11 +71,22 @@ async function fileExists(path) {
   }
 }
 
+/**
+ * Check whether a resolved path stays within the repository.
+ * @param path The absolute path to compare with the repository root.
+ */
 function withinRoot(path) {
   const name = relative(root, path);
   return name !== ".." && !name.startsWith("../") && !isAbsolute(name);
 }
 
+/**
+ * Resolve a module specifier and record any architecture or path violations.
+ * @param file The importing file to cite.
+ * @param path The literal import path to resolve.
+ * @param at The source position for the diagnostic.
+ * @param typeOnly Whether the dependency is a type-only import.
+ */
 async function checkImport(file, path, at, typeOnly) {
   const name = relative(root, file);
   if (path === undefined) {
@@ -125,8 +144,18 @@ async function checkImport(file, path, at, typeOnly) {
   }
 }
 
+/**
+ * Collect static and dynamic dependency references from a parsed source file.
+ * @param ast The parsed file to walk for dependencies.
+ */
 function moduleReferences(ast) {
   const references = [];
+  /**
+   * Record a module load and its source location.
+   * @param expression The expression that names the module to load.
+   * @param typeOnly Whether only types are referenced.
+   * @param position The node offset to report for unresolved paths.
+   */
   function load(expression, typeOnly = false, position = expression?.getStart(ast)) {
     references.push({
       path: expression && ts.isStringLiteralLike(expression) ? expression.text : undefined,
@@ -134,6 +163,10 @@ function moduleReferences(ast) {
       typeOnly,
     });
   }
+  /**
+   * Walk the syntax tree and record the module references on each node.
+   * @param node The current syntax node in the walk.
+   */
   function visit(node) {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       if (node.moduleSpecifier) {
@@ -160,6 +193,11 @@ function moduleReferences(ast) {
   return references;
 }
 
+/**
+ * Check one authored file for forbidden dependencies and code patterns.
+ * @param file The absolute path to the authored file.
+ * @param text The source text to parse and inspect.
+ */
 async function inspectCode(file, text) {
   const name = relative(root, file);
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true);
@@ -173,6 +211,10 @@ async function inspectCode(file, text) {
     );
   }
   if (layer(file) === "browser" && name !== "src/browser-api.js") {
+    /**
+     * Inspect a syntax node and recursively visit its children.
+     * @param node The current syntax node in the walk.
+     */
     function visit(node) {
       if (
         ts.isIdentifier(node) &&
@@ -198,6 +240,10 @@ async function inspectCode(file, text) {
   }
 }
 
+/**
+ * Find authored files recursively while skipping excluded paths.
+ * @param directory The directory to walk for project files.
+ */
 async function collect(directory) {
   const skip = new Set([".git", ".agents", ".codex", ".aws", "node_modules", "dist", "coverage"]);
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
@@ -219,6 +265,10 @@ async function collect(directory) {
   }
 }
 
+/**
+ * Derive a Markdown heading anchor for local link validation.
+ * @param heading The heading text before anchor normalization.
+ */
 function slug(heading) {
   return heading
     .toLowerCase()
@@ -227,6 +277,7 @@ function slug(heading) {
     .replace(/\s+/gu, "-");
 }
 
+/** Check local documentation links and required files and collect failures. */
 async function checkDocs() {
   const markdown = new Marked();
   const docs = new Map();
