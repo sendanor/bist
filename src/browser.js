@@ -1428,10 +1428,95 @@ const actionDescriptions = {
 };
 
 /**
+ * Show model findings beside the affected recipe filenames.
+ * @param warnings Validated findings, each associated with one stored file part.
+ * @param names Filenames from the selected revision.
+ */
+function llmWarningList(warnings, names) {
+  return el(
+    "ul",
+    {},
+    ...warnings.map(({ part, reason }) =>
+      el("li", {}, el("strong", {}, names?.[part] ?? parts[part]), " — ", reason),
+    ),
+  );
+}
+
+/**
+ * Present a fresh, advisory check for this open revision, including its pending and empty states.
+ * @param recipe Stored snapshot with its revision ID, edit version and filenames.
+ */
+function revisionRecheck(recipe) {
+  const heading = el(
+    "h2",
+    { id: "revision-recheck-heading", tabindex: "-1" },
+    t("llm-recheck-title"),
+  );
+  const status = el("p", { role: "status" });
+  const details = el("div");
+  const dismiss = btn(t("llm-recheck-dismiss"), () => {
+    view.hidden = true;
+    toolbar.querySelector(".revision-trigger")?.focus();
+  });
+  const view = el(
+    "section",
+    { hidden: "", className: "panel revision-recheck", "aria-labelledby": heading.id },
+    el("div", { className: "recheck-heading" }, heading, dismiss),
+    status,
+    details,
+  );
+  let running = false;
+  /** Run the current rules once per explicit request and keep results in this view. */
+  async function run() {
+    view.hidden = false;
+    heading.focus();
+    if (running) {
+      return;
+    }
+    running = true;
+    details.replaceChildren();
+    status.classList.remove("revision-action-error");
+    status.textContent = t("llm-recheck-running");
+    try {
+      const report = await api("review/recheck", {
+        slug: recipe.slug,
+        revision: recipe.id,
+        editVersion: recipe.editVersion,
+      });
+      if (!report.checkedParts.length) {
+        status.textContent = t("llm-recheck-empty");
+        return;
+      }
+      status.textContent = report.warnings.length
+        ? t("llm-recheck-warnings")
+        : t("llm-recheck-clean");
+      if (report.warnings.length) {
+        details.append(llmWarningList(report.warnings, recipe.fileNames));
+      }
+      const names = report.checkedParts.map((part) => recipe.fileNames?.[part] ?? parts[part]);
+      details.append(
+        el(
+          "p",
+          { className: "muted" },
+          t("llm-recheck-files").replace("{files}", names.join(", ")),
+        ),
+      );
+    } catch (error) {
+      status.classList.add("revision-action-error");
+      status.textContent = error.message;
+    } finally {
+      running = false;
+    }
+  }
+  return { view, run };
+}
+
+/**
  * List the actions available for the current revision and viewer.
  * @param recipe Loaded revision with the author's permissions and review status.
+ * @param recheck Optional callback for a maintainer's advisory review.
  */
-function revisionChoices(recipe) {
+function revisionChoices(recipe, recheck) {
   const choices = [];
   /**
    * Add an available review action to the revision menu.
@@ -1447,6 +1532,9 @@ function revisionChoices(recipe) {
   }
   if (maintainer && recipe.state === "approved" && !recipe.removal_reason) {
     addAction("publish", t("publish-approved-revision"));
+  }
+  if (recheck) {
+    choices.push({ label: t("llm-recheck-action"), run: recheck });
   }
   if (recipe.state !== "quarantined") {
     choices.push({
@@ -1557,9 +1645,10 @@ function showRevisionAction(choice, submit, trigger) {
  * Build the toolbar disclosure for a revision.
  * @param recipe Loaded revision and its current snapshot version.
  * @param section Section to return to if the revision is removed.
+ * @param recheck Optional action that checks the displayed edit in place.
  */
-function revisionControls(recipe, section) {
-  const choices = revisionChoices(recipe);
+function revisionControls(recipe, section, recheck) {
+  const choices = revisionChoices(recipe, recheck);
   if (!choices.length) {
     return null;
   }
@@ -1619,7 +1708,11 @@ function revisionControls(recipe, section) {
           choice.label,
           () => {
             toggle(false);
-            showRevisionAction(choice, submit, trigger);
+            if (choice.run) {
+              void choice.run();
+            } else {
+              showRevisionAction(choice, submit, trigger);
+            }
           },
           choice.destructive ? "is-destructive" : "",
         );
@@ -1665,9 +1758,10 @@ async function recipePage(section, slug, revision) {
     }
   }
   recentRecipe = recipe;
+  const recheck = maintainer ? revisionRecheck(recipe) : null;
   const filters = new URL(listingPaths.get(section) ?? "/" + section, location.origin).searchParams;
   return {
-    actions: revisionControls(recipe, section),
+    actions: revisionControls(recipe, section, recheck?.run),
     toolbarTitle: recipe.title,
     view: [
       el(
@@ -1687,6 +1781,7 @@ async function recipePage(section, slug, revision) {
             ),
         ),
       ),
+      recheck?.view,
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
       recipe.removal_reason &&
         el("p", { className: "panel" }, t("removal-requested") + recipe.removal_reason),
@@ -1695,13 +1790,7 @@ async function recipePage(section, slug, revision) {
           "section",
           { className: "panel" },
           el("h2", {}, t("llm-review-acknowledged")),
-          el(
-            "ul",
-            {},
-            ...recipe.llmWarnings.map(({ part, reason }) =>
-              el("li", {}, el("strong", {}, parts[part]), " — ", reason),
-            ),
-          ),
+          llmWarningList(recipe.llmWarnings, recipe.fileNames),
         ),
       fileViewer(recipe, base),
       el(

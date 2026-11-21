@@ -148,6 +148,13 @@ Optionally enter a public MCP reference query under **LLM review**. Enable OpenA
 or Context7 in **Assistant add-ons** so the model can look up that reference when it
 needs it. The MCP server receives the configured public query and optional library ID.
 
+To try the current rules on an existing recipe, open its revision and choose
+**Revision actions → Re-run LLM review**. A maintainer can run a fresh check on every
+present file with an enabled rule, including files saved before LLM review was configured.
+The results appear in the open revision. Both **Warn** and **Block** produce advisory
+warnings here. Submission and publication status stay as they were. Dismiss the report
+when finished, or run the action again after changing the rules.
+
 ## Run a recipe's tests
 
 Run downloaded tests in the project that consumes the recipe. When tests import
