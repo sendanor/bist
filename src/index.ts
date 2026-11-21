@@ -430,6 +430,8 @@ export default {
           }
           case "/api/search":
             return json(await cookbook.search(input));
+          case "/api/tags":
+            return json(await cookbook.tags(input.scope));
           case "/api/recipe":
             return json(await cookbook.get(input, input.reviewComments === "1"));
           case "/api/mine":

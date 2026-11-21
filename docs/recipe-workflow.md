@@ -11,6 +11,10 @@ A recipe can include any combination of `source`, `interface`, `tests`, `styles`
 `documentation`, and `instructions`. Include at least one non-empty part. Each part has a
 12,000 UTF-8 byte limit, and a JSON request has a 96,000 byte limit.
 
+On the contribution form, select an existing tag or type new tags separated by commas.
+Use **Add tags** or press Enter to add the typed tags. Select a tag's remove button to
+take it off the draft. Each revision supports up to eight tags.
+
 Use a lowercase, hyphenated slug. To update your own unapproved revision, use **Edit draft**
 and include all parts you want to keep. To make further changes to an approved or published
 revision, propose an improvement. This creates a new revision that needs its own approval.

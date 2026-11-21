@@ -225,8 +225,9 @@ function listingPath(section, filters, cursor) {
  * Build a filter form that starts again at the first page when submitted.
  * @param section The active list section.
  * @param filters The values shown in the active filter controls.
+ * @param tags Tag suggestions visible in this section.
  */
-function listingForm(section, filters) {
+function listingForm(section, filters, tags) {
   const review = section === "review";
   const status = el(
     "select",
@@ -261,9 +262,10 @@ function listingForm(section, filters) {
     field(
       "tag",
       t("tag"),
-      { placeholder: t("e-g-utilities"), maxlength: 32 },
+      { placeholder: t("e-g-utilities"), maxlength: 32, list: "filter-tags" },
       filters.get("tag") ?? "",
     ),
+    el("datalist", { id: "filter-tags" }, ...tags.map((tag) => el("option", { value: tag }))),
     review && el("label", {}, t("status"), status),
     el(
       "div",
@@ -272,6 +274,18 @@ function listingForm(section, filters) {
       active && buttonLink(t("clear-filters"), "/" + section),
     ),
   );
+}
+
+/**
+ * Fetch tag suggestions without making tag entry depend on the network request.
+ * @param section The browser section whose visible recipe tags are requested.
+ */
+async function tagOptions(section) {
+  try {
+    return await api("tags?" + new URLSearchParams({ scope: section }));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -284,7 +298,9 @@ async function listingPage(section) {
   const endpoint = { library: "search", mine: "mine", review: "queue" }[section];
   const path = listingPath(section, filters, cursor);
   const params = new URL(path, location.origin).search;
+  const suggestions = tagOptions(section);
   const { items, previousCursor, nextCursor } = await api(endpoint + params);
+  const tags = await suggestions;
   const active = filters.get("query") || filters.get("tag") || filters.get("state");
   const descriptions = {
     library: t("find-recipes-and-guides"),
@@ -303,7 +319,7 @@ async function listingPage(section) {
   };
   return [
     title(labels[section], descriptions[section]),
-    listingForm(section, filters),
+    listingForm(section, filters, tags),
     items.length
       ? list(items, section)
       : empty(
@@ -414,12 +430,131 @@ async function submitWithDuplicateCheck(payload) {
 }
 
 /**
+ * Edit an ordered set of recipe tags through a dropdown and free text.
+ * @param initial Tags already attached to the revision, if any.
+ * @param suggestions Existing tags available to this contributor.
+ */
+function recipeTagPicker(initial, suggestions) {
+  let tags = [...initial];
+  const entry = field("tagEntry", t("tags-separated-by-commas"), {
+    placeholder: t("arrays-utilities"),
+    maxlength: 280,
+  });
+  const input = entry.querySelector("input");
+  const selected = el("div", { className: "selected-tags" });
+  const select = el(
+    "select",
+    {},
+    el("option", { value: "" }, t("choose-tag")),
+    ...suggestions.map((tag) => el("option", { value: tag }, tag)),
+  );
+
+  /** Show selected tags and disable options that cannot add another tag. */
+  function sync() {
+    selected.replaceChildren(
+      ...tags.map((tag) => {
+        const remove = btn(
+          tag + " ×",
+          () => {
+            tags = tags.filter((current) => current !== tag);
+            input.setCustomValidity("");
+            sync();
+            input.focus();
+          },
+          "chip tag-remove",
+        );
+        remove.setAttribute("aria-label", t("remove-tag") + " " + tag);
+        return remove;
+      }),
+    );
+    for (const option of select.options) {
+      option.disabled = Boolean(option.value) && (tags.includes(option.value) || tags.length >= 8);
+    }
+  }
+
+  /**
+   * Add normalized tags if the updated set fits the submission limits.
+   * @param additions Tags selected from the list or entered in the text field.
+   */
+  function add(additions) {
+    const next = [
+      ...new Set([...tags, ...additions.map((tag) => tag.trim().toLowerCase()).filter(Boolean)]),
+    ];
+    let error = "";
+    if (next.length > 8) {
+      error = t("tag-count-limit");
+    } else if (next.some((tag) => tag.length > 32)) {
+      error = t("tag-length-limit");
+    }
+    input.setCustomValidity(error);
+    if (error) {
+      input.reportValidity();
+      return false;
+    }
+    tags = next;
+    sync();
+    return true;
+  }
+
+  /** Commit typed tags and return a snapshot ready to submit. */
+  function read() {
+    if (!add(input.value.split(","))) {
+      return null;
+    }
+    input.value = "";
+    return [...tags];
+  }
+
+  select.addEventListener("change", () => {
+    if (select.value) {
+      add([select.value]);
+      select.value = "";
+    }
+  });
+  input.addEventListener("input", () => input.setCustomValidity(""));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      read();
+    }
+  });
+  sync();
+  return {
+    node: el(
+      "fieldset",
+      { className: "recipe-tags" },
+      el("legend", {}, t("recipe-tags")),
+      el(
+        "div",
+        { className: "pair" },
+        el("div", { className: "tag-entry" }, entry, btn(t("add-tags"), read)),
+        suggestions.length && el("label", {}, t("existing-tag"), select),
+      ),
+      selected,
+    ),
+    read,
+    /**
+     * Replace the current selection when filling an example.
+     * @param values Tags provided by the example recipe.
+     */
+    set(values) {
+      tags = [...values];
+      select.value = "";
+      input.value = "";
+      input.setCustomValidity("");
+      sync();
+    },
+  };
+}
+
+/**
  * Build the form for creating, editing, or proposing a recipe revision.
  * @param recipe The optional revision used to prefill the form.
  * @param replace Whether to update the existing draft in place.
  */
-function contribute(recipe, replace = false) {
+async function contribute(recipe, replace = false) {
   const isRevision = Boolean(recipe?.id);
+  const picker = recipeTagPicker(recipe?.tags ?? [], await tagOptions("contribute"));
   const form = el(
     "form",
     {
@@ -430,6 +565,10 @@ function contribute(recipe, replace = false) {
        */
       onsubmit: async (event) => {
         event.preventDefault();
+        const tags = picker.read();
+        if (!tags) {
+          return;
+        }
         const data = Object.fromEntries(new FormData(form));
         const submit = form.querySelector("[type=submit]");
         submit.disabled = true;
@@ -442,10 +581,7 @@ function contribute(recipe, replace = false) {
             ...(replace
               ? { replace: recipe.id, editVersion: recipe.editVersion }
               : { base: recipe?.id }),
-            tags: data.tags
-              .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean),
+            tags,
             files: Object.fromEntries(
               Object.keys(parts)
                 .filter((part) => data[part].trim())
@@ -494,12 +630,7 @@ function contribute(recipe, replace = false) {
       { required: "", maxlength: 300 },
       recipe?.summary,
     ),
-    field(
-      "tags",
-      t("tags-separated-by-commas"),
-      { placeholder: t("arrays-utilities"), maxlength: 280 },
-      recipe?.tags?.join(", "),
-    ),
+    picker.node,
     ...["source", "interface", "tests", "styles", "documentation", "instructions"]
       .map((key) => [key, parts[key]])
       .map(([key, name]) =>
@@ -524,7 +655,7 @@ function contribute(recipe, replace = false) {
           for (const key of ["slug", "title", "summary"]) {
             form.elements[key].value = example[key];
           }
-          form.elements.tags.value = example.tags.join(", ");
+          picker.set(example.tags);
           for (const [key, value] of Object.entries(example.files)) {
             form.elements[key].value = value;
           }
@@ -1814,9 +1945,9 @@ async function render() {
       if (page === "edit" && !recipe.canReplace) {
         throw new Error(t("draft-no-longer-editable"));
       }
-      view = contribute(recipe, page === "edit");
+      view = await contribute(recipe, page === "edit");
     } else if (section === "contribute") {
-      view = contribute();
+      view = await contribute();
     } else if (section === "settings") {
       view = await settingsPage();
     } else if (section === "assistant") {

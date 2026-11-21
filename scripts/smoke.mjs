@@ -1067,6 +1067,31 @@ describe("hasFields", () => {
     }),
   );
   const filters = { query: "CURSOR KEYWORD", tag: "paging", state: "pending" };
+  await paginationDb.batch([
+    paginationDb
+      .prepare("UPDATE revisions SET tags = ? WHERE id = ?")
+      .bind(JSON.stringify(["paging", "draft-only"]), sampleIds[0]),
+    paginationDb
+      .prepare("UPDATE revisions SET tags = ? WHERE id = ?")
+      .bind(JSON.stringify(["paging", "public-only"]), sampleIds.at(-1)),
+  ]);
+  assert.equal((await dispatch("/api/tags", null)).status, 401);
+  assert.equal((await dispatch("/api/tags?scope=review", "reader")).status, 403);
+  assert.equal((await dispatch("/api/tags?scope=unknown", "maintainer")).status, 400);
+  const publicTags = await (await dispatch("/api/tags", "reader")).json();
+  assert.ok(publicTags.includes("paging"));
+  assert.ok(publicTags.includes("public-only"));
+  assert.ok(!publicTags.includes("draft-only"));
+  assert.deepEqual(
+    await (await dispatch("/api/tags?scope=contribute", "reader")).json(),
+    publicTags,
+  );
+  assert.ok(
+    (await (await dispatch("/api/tags?scope=mine", "author")).json()).includes("draft-only"),
+  );
+  assert.ok(
+    (await (await dispatch("/api/tags?scope=review", "maintainer")).json()).includes("draft-only"),
+  );
   const first = await tool("review_queue", filters, "maintainer");
   assert.equal(first.items.length, 20);
   assert.equal(first.previousCursor, null);

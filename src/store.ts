@@ -502,6 +502,46 @@ export class Cookbook {
   }
 
   /**
+   * Suggest frequently used tags from recipes visible in the requested section.
+   * @param scope Browser section whose tag visibility rules apply.
+   * @throws {RequestError} When the scope is invalid or requires maintainer access.
+   */
+  async tags(scope: unknown) {
+    const published = "v.state = 'published' AND v.id = r.live";
+    const own = "v.author = ? AND v.state != 'removed'";
+    let condition;
+    let bindings: string[] = [];
+    switch (scope) {
+      case "library":
+      case undefined:
+        condition = published;
+        break;
+      case "mine":
+        condition = own;
+        bindings = [this.user.id];
+        break;
+      case "review":
+        this.maintainer();
+        condition = reviewScope;
+        break;
+      case "contribute":
+        condition = `(${published}) OR (${own})`;
+        bindings = [this.user.id];
+        break;
+      default:
+        throw new RequestError("Choose a supported tag scope.");
+    }
+    const rows = await this.sql(
+      `SELECT tag.value AS name FROM revisions v LEFT JOIN recipes r ON r.slug = v.slug
+       CROSS JOIN json_each(v.tags) AS tag
+       WHERE (${condition}) AND tag.type = 'text'
+       GROUP BY tag.value ORDER BY COUNT(*) DESC, tag.value LIMIT 100`,
+      ...bindings,
+    ).all<{ name: string }>();
+    return rows.results.map(({ name }) => name).sort();
+  }
+
+  /**
    * Find one page of published recipes matching the requested terms and tag.
    * @param input The search filters and cursor received from the API or MCP client.
    */
