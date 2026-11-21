@@ -433,8 +433,7 @@ pre {
   color: #ecedff;
   border-radius: 9px;
   padding: 16px;
-  overflow: auto;
-  max-height: 540px;
+  overflow-x: auto;
   font:
     0.91rem/1.65 ui-monospace,
     monospace;
@@ -591,7 +590,6 @@ main,
   padding: 12px 8px;
   font-size: 0.875rem;
   line-height: 1.55;
-  max-height: 65vh;
   overscroll-behavior-inline: contain;
 }
 
@@ -743,10 +741,6 @@ main,
 @media (max-width: 500px) {
   .content {
     padding-inline: 14px;
-  }
-
-  .code-box {
-    max-height: none;
   }
 
   .recipe-prose {
