@@ -570,6 +570,7 @@ async function contribute(recipe, replace = false) {
           return;
         }
         const data = Object.fromEntries(new FormData(form));
+        const included = Object.keys(parts).filter((part) => data[part].trim());
         const submit = form.querySelector("[type=submit]");
         submit.disabled = true;
         banner();
@@ -582,10 +583,9 @@ async function contribute(recipe, replace = false) {
               ? { replace: recipe.id, editVersion: recipe.editVersion }
               : { base: recipe?.id }),
             tags,
-            files: Object.fromEntries(
-              Object.keys(parts)
-                .filter((part) => data[part].trim())
-                .map((part) => [part, data[part]]),
+            files: Object.fromEntries(included.map((part) => [part, data[part]])),
+            fileNames: Object.fromEntries(
+              included.map((part) => [part, data["filename-" + part].trim()]),
             ),
           });
           if (!result) {
@@ -634,16 +634,26 @@ async function contribute(recipe, replace = false) {
     ...["source", "interface", "tests", "styles", "documentation", "instructions"]
       .map((key) => [key, parts[key]])
       .map(([key, name]) =>
-        field(
-          key,
-          name,
-          {
-            maxlength: 12000,
-            class: key === "source" || key === "interface" || key === "tests" ? "code-input" : "",
-            spellcheck: "false",
-          },
-          recipe?.files?.[key],
-          true,
+        el(
+          "div",
+          { className: "recipe-file-fields" },
+          field(
+            key,
+            name,
+            {
+              maxlength: 12000,
+              class: key === "source" || key === "interface" || key === "tests" ? "code-input" : "",
+              spellcheck: "false",
+            },
+            recipe?.files?.[key],
+            true,
+          ),
+          field(
+            "filename-" + key,
+            t("filename") + " · " + name,
+            { maxlength: 96, placeholder: t("default-filename"), spellcheck: "false" },
+            recipe?.fileNames?.[key] ?? "",
+          ),
         ),
       ),
     el(
@@ -1110,6 +1120,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
     { id: "recipe-part-title-" + key, tabindex: "-1" },
     icon(partIcon[key]),
     name,
+    recipe.fileNames?.[key] && el("code", { className: "recipe-filename" }, recipe.fileNames[key]),
   );
   const area = el("div", { id: "recipe-part-content-" + key });
   const status = el("span", { className: "copy-status", role: "status" });
@@ -1213,6 +1224,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
   renderPart();
   return {
     heading,
+    name,
     section: el(
       "section",
       { className: "panel recipe-part", "aria-labelledby": heading.id },
@@ -1250,8 +1262,8 @@ function fileViewer(recipe, base) {
   const navigate = el(
     "nav",
     { className: "recipe-contents", "aria-label": t("recipe-sections") },
-    ...files.map(({ heading }) =>
-      btn(heading.textContent, () => {
+    ...files.map(({ heading, name }) =>
+      btn(name, () => {
         heading.focus({ preventScroll: true });
         heading.scrollIntoView({ block: "start" });
       }),
@@ -1545,21 +1557,126 @@ async function recipePage(section, slug, revision) {
 }
 
 /**
+ * Load the saved key's catalog and let the maintainer save a model independently.
+ * @param initial Saved model and key status.
+ */
+function openAiModelPicker(initial) {
+  let state = initial;
+  let request = 0;
+  const select = el("select", { name: "model", required: "" });
+  const status = el("p", { role: "status", className: "muted" });
+  const save = el("button", { type: "submit", className: "primary" }, t("openai-save-model"));
+  const refreshButton = btn(t("openai-load-models"), () => void refresh());
+  /**
+   * Fetch current models, discarding a result if the key changed during the request.
+   */
+  async function refresh() {
+    const current = ++request;
+    select.replaceChildren(el("option", { value: "" }, t("openai-choose-model")));
+    select.disabled = true;
+    save.disabled = true;
+    refreshButton.disabled = true;
+    if (!state.hasCredential || !state.encryptionAvailable) {
+      status.textContent = t("openai-key-first");
+      return;
+    }
+    status.textContent = t("openai-loading-models");
+    try {
+      const catalog = await api("assistant/models");
+      if (current !== request) {
+        return;
+      }
+      if (catalog.status === "ready" && catalog.models.length) {
+        select.append(...catalog.models.map((model) => el("option", { value: model }, model)));
+        select.disabled = false;
+        select.value = catalog.models.includes(state.model) ? state.model : "";
+        status.textContent = state.model && !select.value ? t("assistant-model-missing") : "";
+      } else if (catalog.status === "unauthorized") {
+        status.textContent = t("assistant-model-unauthorized");
+      } else {
+        status.textContent = t("assistant-model-unavailable");
+      }
+    } catch (error) {
+      if (current === request) {
+        status.textContent = error.message;
+      }
+    } finally {
+      if (current === request) {
+        refreshButton.disabled = false;
+      }
+    }
+  }
+  select.addEventListener("change", () => {
+    save.disabled = !select.value || select.value === state.model;
+  });
+  const form = el(
+    "form",
+    {
+      className: "panel form",
+      /**
+       * Save the selected catalog entry without editing the key.
+       * @param event Model form submission.
+       */
+      onsubmit: async (event) => {
+        event.preventDefault();
+        const model = select.value;
+        if (!model || save.disabled) {
+          return;
+        }
+        const current = request;
+        save.disabled = true;
+        select.disabled = true;
+        refreshButton.disabled = true;
+        try {
+          const updated = await api("settings/openai", { model });
+          if (current === request) {
+            state = updated;
+            status.textContent = t("openai-model-saved");
+          }
+        } catch (error) {
+          if (current === request) {
+            status.textContent = error.message;
+            save.disabled = false;
+          }
+        } finally {
+          if (current === request) {
+            select.disabled = false;
+            refreshButton.disabled = false;
+          }
+        }
+      },
+    },
+    el("h2", {}, t("openai-model")),
+    el("label", {}, t("openai-choose-model"), select),
+    el("div", { className: "actions" }, save, refreshButton),
+    status,
+  );
+  void refresh();
+  return {
+    form,
+    /**
+     * Reload the catalog with the latest credential from the server.
+     * @param updated Metadata returned after the credential changes.
+     */
+    update(updated) {
+      state = updated;
+      void refresh();
+    },
+  };
+}
+
+/**
  * Build the OpenAI settings form with a write-only credential field.
  * @param settings Current model, credential presence and encryption readiness.
  */
 function openAiSettingsForm(settings) {
-  const model = field(
-    "model",
-    t("openai-model"),
-    { maxlength: 100, required: "" },
-    settings.model ?? "",
-  );
+  const picker = openAiModelPicker(settings);
   const key = field("apiKey", t("openai-key"), {
     type: "password",
     autocomplete: "new-password",
     maxlength: 512,
     spellcheck: "false",
+    required: "",
   });
   key.querySelector("input").disabled = !settings.encryptionAvailable;
   const keyStatus = el("p", { className: "muted" });
@@ -1578,9 +1695,12 @@ function openAiSettingsForm(settings) {
     cancel.disabled = true;
     save.disabled = true;
     try {
-      update(await api("settings/openai/remove-key", {}));
+      const state = await api("settings/openai/remove-key", {});
+      update(state);
+      picker.update(state);
       result.textContent = t("openai-removed");
       confirmation.hidden = true;
+      save.disabled = false;
       save.focus();
     } catch (error) {
       result.textContent = error.message;
@@ -1607,12 +1727,12 @@ function openAiSettingsForm(settings) {
     remove.hidden = !state.hasCredential;
   }
   update(settings);
-  return el(
+  const form = el(
     "form",
     {
       className: "panel form",
       /**
-       * Save the model and optionally replace the credential.
+       * Save or replace the credential without changing the model.
        * @param event Browser submission event for the OpenAI settings section.
        */
       onsubmit: async (event) => {
@@ -1625,12 +1745,9 @@ function openAiSettingsForm(settings) {
         confirmation.hidden = true;
         result.textContent = "";
         try {
-          update(
-            await api("settings/openai", {
-              model: input.model.value,
-              ...(replacement ? { apiKey: replacement } : {}),
-            }),
-          );
+          const state = await api("settings/openai", { apiKey: replacement });
+          update(state);
+          picker.update(state);
           result.textContent = t("openai-saved");
         } catch (error) {
           result.textContent = error.message;
@@ -1640,8 +1757,7 @@ function openAiSettingsForm(settings) {
         }
       },
     },
-    el("h2", {}, t("openai-settings")),
-    model,
+    el("h2", {}, t("openai-api-key")),
     key,
     keyStatus,
     !settings.encryptionAvailable &&
@@ -1650,12 +1766,12 @@ function openAiSettingsForm(settings) {
     confirmation,
     result,
   );
+  return [form, picker.form];
 }
 
-/** Build the maintainer's OpenAI and recipe quality settings. */
-async function settingsPage() {
+/** Build the maintainer’s recipe quality settings form. */
+async function codePolicyPage() {
   const { policy, prettierOptions, eslintRules, qualityOptions } = await api("settings");
-  const openAiSettings = await api("settings/openai");
   const form = el("form", { className: "form code-settings" });
   const controls = {};
   const formatOptions = prettierOptions.map((option) => {
@@ -1805,13 +1921,7 @@ async function settingsPage() {
       save.disabled = false;
     }
   });
-  return [
-    title(t("settings")),
-    openAiSettingsForm(openAiSettings),
-    el("h2", {}, t("code-policy")),
-    el("p", { className: "muted" }, t("set-the-rules-for-new-recipe-revisions-submitted")),
-    form,
-  ];
+  return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
 }
 
 /** Build the maintainer's published-recipe assistant and its model access check. */
@@ -1825,7 +1935,7 @@ async function assistantPage() {
         "div",
         { className: "panel" },
         el("p", {}, t("assistant-unconfigured")),
-        buttonLink(t("settings"), "/settings"),
+        buttonLink(t("openai-settings"), "/settings/openai"),
       ),
     ];
   }
@@ -1908,6 +2018,39 @@ async function assistantPage() {
   ];
 }
 
+/**
+ * Navigate among settings sections while retaining the active section.
+ * @param page The current settings route.
+ */
+async function settingsPage(page) {
+  const nav = el(
+    "nav",
+    { className: "actions settings-nav", "aria-label": t("settings") },
+    ...[
+      ["settings/openai", t("openai-settings")],
+      ["settings/code-policy", t("code-policy")],
+    ].map(([path, label]) =>
+      el(
+        "a",
+        {
+          className: "button",
+          href: "/" + path,
+          "aria-current": page === path ? "page" : undefined,
+        },
+        label,
+      ),
+    ),
+  );
+  if (page === "settings/openai") {
+    return [title(t("openai-settings")), nav, ...openAiSettingsForm(await api("settings/openai"))];
+  }
+  if (page === "settings/code-policy") {
+    const [heading, form] = await codePolicyPage();
+    return [heading, nav, form];
+  }
+  return [title(t("settings")), nav];
+}
+
 /** Render the current page path and discard stale asynchronous results. */
 async function render() {
   const current = ++renderId;
@@ -1949,7 +2092,7 @@ async function render() {
     } else if (section === "contribute") {
       view = await contribute();
     } else if (section === "settings") {
-      view = await settingsPage();
+      view = await settingsPage(page);
     } else if (section === "assistant") {
       view = await assistantPage();
     } else {

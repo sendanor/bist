@@ -71,6 +71,13 @@
       "when": 1795219200009,
       "tag": "0009_openai_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795219200010,
+      "tag": "0010_recipe_file_names",
+      "breakpoints": true
     }
   ]
 }

@@ -80,7 +80,7 @@ runnable MCP request.
 
 ## Configure an instance
 
-Maintainers configure formatting, lint, type, CSS, and duplicate checks in **Settings**.
+Maintainers configure formatting, lint, type, CSS, and duplicate checks in **Settings → Code policy**.
 See the [quality policy](QUALITY.md) for defaults, configurable checks, and supported inputs.
 
 The included hosting configuration targets ChatGPT Sites and uses a Cloudflare Worker with a
@@ -96,8 +96,9 @@ settings and credentials outside the public repository.
 The optional **Assistant** page lets maintainers ask questions about published recipes.
 Set a randomly generated 32-byte key, encoded as 64 hexadecimal characters, as the
 `SETTINGS_ENCRYPTION_KEY` deployment secret. Keep a secure copy separate from D1 backups.
-In **Settings → OpenAI**, enter the OpenAI API key and a model that supports the Responses
-API and function calling, then save. Bist stores the API key encrypted in D1 and shows only
+In **Settings → OpenAI**, save the OpenAI API key first. Bist loads the model catalog so
+you can choose a model that supports the Responses API and function calling. Save the model
+separately. Bist stores the API key encrypted in D1 and shows only
 whether a key is configured. Maintainers can update the model or replace or remove the API key
 without redeploying. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
 

@@ -98,6 +98,13 @@ const tools = [
         minProperties: 1,
         additionalProperties: false,
       },
+      fileNames: {
+        type: "object",
+        description:
+          "Optional filenames keyed by file part. An empty string restores a default name.",
+        properties: files,
+        additionalProperties: false,
+      },
     },
     ["slug", "title", "summary", "files"],
   ),
@@ -295,11 +302,14 @@ async function openAiStatus(env: Env, cookbook: Cookbook) {
  */
 async function saveOpenAi(request: Request, env: Env, cookbook: Cookbook) {
   const input = await readJsonObject(request, 4_096);
-  const model = typeof input.model === "string" ? input.model.trim() : null;
-  if (!isOpenAiModel(model)) {
+  const model = typeof input.model === "string" ? input.model.trim() : input.model;
+  if (model !== undefined && !isOpenAiModel(model)) {
     throw new RequestError("Enter a valid OpenAI model identifier.");
   }
   const key = input.apiKey;
+  if (key === undefined && model === undefined) {
+    throw new RequestError("Enter an OpenAI API key or choose a model.");
+  }
   if (
     key !== undefined &&
     (typeof key !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{9,511}$/u.test(key))
@@ -309,7 +319,7 @@ async function saveOpenAi(request: Request, env: Env, cookbook: Cookbook) {
   await cookbook.reserveOpenAiRequest("settings");
   const credential =
     key === undefined ? null : await sealOpenAiKey(env.SETTINGS_ENCRYPTION_KEY, key);
-  await cookbook.saveOpenAiSettings(model, credential);
+  await cookbook.saveOpenAiSettings(model ?? null, credential);
   return json(await openAiStatus(env, cookbook));
 }
 
@@ -322,7 +332,7 @@ async function saveOpenAi(request: Request, env: Env, cookbook: Cookbook) {
  */
 async function openAiConnection(env: Env, cookbook: Cookbook, action: "ask" | "catalog") {
   const stored = await cookbook.readOpenAiConnection();
-  if (!stored?.credential || !isOpenAiModel(stored.model)) {
+  if (!stored?.credential || (action === "ask" && !isOpenAiModel(stored.model))) {
     throw new RequestError("Configure OpenAI in Bist Settings first.", 503);
   }
   await cookbook.reserveOpenAiRequest(action);

@@ -137,6 +137,7 @@ try {
   await db.batch(
     secretsMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
   );
+  await db.prepare(await readFile("drizzle/0010_recipe_file_names.sql", "utf8")).run();
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -240,6 +241,68 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   assert.equal(upgraded.eslint.curly, "error");
   assert.equal(upgraded.eslint["quality/documentation"], "error");
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
+  const namingPolicy = {
+    ...settings.policy,
+    quality: { ...settings.policy.quality, typeCheck: "error" },
+  };
+  assert.equal((await dispatch("/api/settings", "maintainer", namingPolicy)).status, 200);
+  const namedPayload = {
+    ...payload,
+    slug: "file-naming-fixture",
+    files: {
+      source:
+        'import type { Entry } from "./entry-contract.ts"; export const namedEntry: Entry = { name: "fixture" };',
+      interface: "export interface Entry { readonly name: string; }",
+      tests:
+        'import { namedEntry } from "./named-entry.js"; export const received = namedEntry.name;',
+      styles: ".named-entry { color: red; }",
+      documentation: "# Naming fixture",
+      instructions: "Preserve the file names.",
+    },
+    fileNames: {
+      source: "named-entry.ts",
+      interface: "entry-contract.ts",
+      tests: "entry.test.ts",
+      styles: "entry.css",
+      documentation: "guide.md",
+      instructions: "workflow.txt",
+    },
+  };
+  const named = await tool("submit_recipe", namedPayload);
+  const namedRef = { slug: named.slug, revision: named.id };
+  assert.deepEqual((await tool("get_recipe", namedRef)).fileNames, namedPayload.fileNames);
+  assert.deepEqual((await tool("get_recipe", { ...namedRef, parts: ["interface"] })).fileNames, {
+    interface: "entry-contract.ts",
+  });
+  const rename = { ...namedPayload, replace: named.id, editVersion: named.editVersion };
+  const invalidName = await dispatch("/api/submit", "author", {
+    ...rename,
+    fileNames: { source: "../outside.ts" },
+  });
+  assert.equal(invalidName.status, 400);
+  const collision = await dispatch("/api/submit", "author", {
+    ...rename,
+    fileNames: { tests: "NAMED-ENTRY.ts" },
+  });
+  assert.equal(collision.status, 400);
+  const staleImport = await dispatch("/api/submit", "author", {
+    ...rename,
+    fileNames: { source: "new-entry.ts" },
+  });
+  assert.equal(staleImport.status, 400);
+  assert.match((await staleImport.json()).error, /recipe-imports/);
+  const renamed = await tool("submit_recipe", {
+    ...rename,
+    fileNames: { source: "new-entry.ts", documentation: "" },
+    files: { ...rename.files, tests: rename.files.tests.replace("named-entry.js", "new-entry.js") },
+  });
+  assert.equal(renamed.id, named.id);
+  assert.deepEqual((await tool("get_recipe", namedRef)).fileNames, {
+    ...namedPayload.fileNames,
+    source: "new-entry.ts",
+    documentation: "README.md",
+  });
+  assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
   const spacingPayload = {
     ...payload,
     slug: "declaration-spacing",
@@ -275,6 +338,8 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
     "/mine",
     "/review",
     "/settings",
+    "/settings/openai",
+    "/settings/code-policy",
     "/recipe/review/route-example/" + routeRevision,
     "/edit/route-example/" + routeRevision,
     "/improve/route-example/" + routeRevision,
@@ -1232,14 +1297,22 @@ describe("hasFields", () => {
     body: JSON.stringify({ model, apiKey: key }),
   });
   assert.equal(refused.status, 403);
-  const savedOpenAi = await dispatch("/api/settings/openai", "maintainer", { model, apiKey: key });
+  const savedOpenAi = await dispatch("/api/settings/openai", "maintainer", { apiKey: key });
   assert.equal(savedOpenAi.status, 200);
   assert.deepEqual(await savedOpenAi.json(), {
-    model,
+    model: null,
     hasCredential: true,
     encryptionAvailable: true,
-    configured: true,
+    configured: false,
   });
+  assert.deepEqual(await (await dispatch("/api/assistant/models", "maintainer")).json(), {
+    status: "ready",
+    models: [model],
+  });
+  assert.equal(
+    (await dispatch("/api/assistant", "maintainer", { question: "Find a recipe." })).status,
+    503,
+  );
   const secretsDb = await runtime.getD1Database("DB");
   const row = await secretsDb
     .prepare("SELECT credential FROM openai_settings WHERE id = 1")

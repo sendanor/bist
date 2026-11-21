@@ -2,6 +2,7 @@ import { isRevisionId } from "./guards.ts";
 
 const sections = new Set(["library", "contribute", "mine", "review", "settings", "assistant"]);
 const recipeSections = new Set(["library", "mine", "review"]);
+const settingsPages = new Set(["openai", "code-policy"]);
 
 /**
  * Match a browser pathname against the application routes shared by the shell and the Worker.
@@ -24,6 +25,9 @@ export function parsePagePath(pathname: string) {
   const [page, first, second, third] = segments;
   if (segments.length === 1 && sections.has(page)) {
     return { page, section: page };
+  }
+  if (segments.length === 2 && page === "settings" && settingsPages.has(first)) {
+    return { page: "settings/" + first, section: "settings" };
   }
   if (segments.length === 4 && page === "recipe" && recipeSections.has(first)) {
     return recipeRoute(page, first, second, third);

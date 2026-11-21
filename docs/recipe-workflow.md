@@ -11,6 +11,10 @@ A recipe can include any combination of `source`, `interface`, `tests`, `styles`
 `documentation`, and `instructions`. Include at least one non-empty part. Each part has a
 12,000 UTF-8 byte limit, and a JSON request has a 96,000 byte limit.
 
+Each part has an optional **Filename** in the contribution form. Use a filename with the
+appropriate extension, such as `is-record.ts`, `record.d.ts`, or `is-record.test.ts`.
+Leave the field blank for the default. Update local imports if you rename a code file.
+
 On the contribution form, select an existing tag or type new tags separated by commas.
 Use **Add tags** or press Enter to add the typed tags. Select a tag's remove button to
 take it off the draft. Each revision supports up to eight tags.
@@ -44,6 +48,9 @@ connection. The repository does not distribute connection credentials. See the
 - `submit_recipe` accepts a slug, title, summary, optional tags, and the file snapshot.
   Set `replace` and the current `editVersion` to edit a draft. Set `base` to create a
   new revision from an existing one.
+  Set `fileNames` by part, for example `{"source":"is-record.ts","interface":"record.d.ts"}`.
+  Omit a name to keep it on a draft edit or use an empty string to restore the default.
+  `get_recipe` returns the effective filenames for the requested parts in `fileNames`.
 - `my_revisions` lists your submissions and their review statuses.
 - `review_queue` lists revisions awaiting maintainer action. It accepts the keyword
   `query`, a `tag`, and the optional `state` filter (`pending`, `approved`, `quarantined`,

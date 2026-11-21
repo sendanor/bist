@@ -6,7 +6,7 @@ import {
   qualityOptions,
   validateCodePolicy,
 } from "./code-policy";
-import { normalizeFiles, parts } from "./format";
+import { normalizeFiles, parts, recipeFileNames, type RecipeFileNames } from "./format";
 import { sourceLines } from "./line-diff";
 import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
 export interface Statement {
@@ -54,6 +54,7 @@ type Revision = {
   summary: string;
   tags: string;
   files: string | null;
+  file_names: string;
   state: string;
   created: string;
   live: string | null;
@@ -383,7 +384,7 @@ export class Cookbook {
     const row = await this.sql(
       "SELECT model, credential IS NOT NULL AS hasCredential FROM openai_settings WHERE id = 1",
     ).first<{ model: string; hasCredential: number }>();
-    return { model: row?.model ?? null, hasCredential: Boolean(row?.hasCredential) };
+    return { model: row?.model || null, hasCredential: Boolean(row?.hasCredential) };
   }
 
   /** Load encrypted connection settings for the authorized backend integration. */
@@ -397,18 +398,19 @@ export class Cookbook {
 
   /**
    * Save the model and optional replacement ciphertext in a permission-checked write.
-   * @param model Model ID approved by the current maintainer.
+   * @param model Model ID approved by the current maintainer, or null to preserve the saved model.
    * @param credential Replacement encrypted envelope, or null to preserve the existing value.
    */
-  async saveOpenAiSettings(model: string, credential: string | null) {
+  async saveOpenAiSettings(model: string | null, credential: string | null) {
     this.maintainer();
     await this.sql(
-      `INSERT INTO openai_settings (id, model, credential) SELECT 1, ?, ? WHERE ? = 1
-       ON CONFLICT(id) DO UPDATE SET model = excluded.model,
+      `INSERT INTO openai_settings (id, model, credential) SELECT 1, COALESCE(?, ''), ? WHERE ? = 1
+       ON CONFLICT(id) DO UPDATE SET model = COALESCE(?, openai_settings.model),
          credential = COALESCE(excluded.credential, openai_settings.credential)`,
       model,
       credential,
       this.user.maintainer ? 1 : 0,
+      model,
     ).run();
   }
 
@@ -681,6 +683,7 @@ export class Cookbook {
             ).results,
           }
         : undefined;
+    const files = decodeFiles(row.files, selected);
     return {
       id: row.id,
       ...(review ? { review } : {}),
@@ -699,7 +702,12 @@ export class Cookbook {
       canReplace: ownUnapproved && !row.removal_reason,
       canRemoveDraft: ownUnapproved,
       canRequestRemoval: row.author === this.user.id || this.user.maintainer,
-      files: decodeFiles(row.files, selected),
+      files,
+      fileNames: recipeFileNames(
+        undefined,
+        parts.filter((part) => Object.hasOwn(files, part)),
+        decodeFiles(row.file_names, parts),
+      ),
     };
   }
 
@@ -766,11 +774,18 @@ export class Cookbook {
    * Format and lint a snapshot and translate diagnostics into request errors.
    * @param files The unvalidated file parts supplied by the author.
    * @param policy The effective policy controlling formatting and validation.
+   * @param requestedNames Optional filename changes from the author.
+   * @param inheritedNames Existing file names to preserve when changes are omitted.
    * @throws {RequestError} When a part exceeds its limits or fails validation.
    */
-  private async normalizeSubmission(files: unknown, policy: typeof defaultCodePolicy) {
+  private async normalizeSubmission(
+    files: unknown,
+    policy: typeof defaultCodePolicy,
+    requestedNames: unknown,
+    inheritedNames: RecipeFileNames,
+  ) {
     try {
-      return await normalizeFiles(files, policy);
+      return await normalizeFiles(files, policy, requestedNames, inheritedNames);
     } catch (error) {
       throw new RequestError(error instanceof Error ? error.message : "Recipe validation failed.");
     }
@@ -867,7 +882,23 @@ export class Cookbook {
     }
     const normalizedTags = [...new Set(tags.map((tag) => str(tag, "tag", 32).toLowerCase()))];
     const policy = await this.readCodePolicy();
-    const { files, warnings } = await this.normalizeSubmission(input.files, policy);
+    const parent = replace || base;
+    const previous = parent
+      ? await this.sql(
+          `SELECT file_names FROM revisions WHERE id = ? AND slug = ?
+       AND (state = 'published' OR (state IN ('pending','approved','changes') AND (author = ? OR ?)))`,
+          parent,
+          slug,
+          this.user.id,
+          this.user.maintainer,
+        ).first<{ file_names: string }>()
+      : null;
+    const { files, fileNames, warnings } = await this.normalizeSubmission(
+      input.files,
+      policy,
+      input.fileNames,
+      decodeFiles(previous?.file_names ?? null, parts),
+    );
     await this.indexLegacySnapshots();
     const fingerprint = await fingerprintRecipe(files);
     const duplicate = duplicateCheck(fingerprint, policy.quality, input.allowDuplicates === true);
@@ -883,12 +914,13 @@ export class Cookbook {
       summary,
       tags: JSON.stringify(normalizedTags),
       files: JSON.stringify(files),
+      fileNames: JSON.stringify(fileNames),
     };
     const notices = warnings.length ? { warnings } : {};
     if (replace) {
       const updated = await this.sql(
         `UPDATE revisions
-         SET title = ?, summary = ?, tags = ?, files = ?, edit_version = edit_version + 1,
+         SET title = ?, summary = ?, tags = ?, files = ?, file_names = ?, edit_version = edit_version + 1,
              state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?,
              documentation_hash = ?, instructions_hash = ?, fingerprints_ready = 1
          WHERE id = ? AND slug = ? AND author = ? AND edit_version = ?
@@ -898,6 +930,7 @@ export class Cookbook {
         payload.summary,
         payload.tags,
         payload.files,
+        payload.fileNames,
         ...hashes,
         replace,
         slug,
@@ -924,9 +957,9 @@ export class Cookbook {
         ...match,
       ),
       this.sql(
-        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,code_hash,unit_hashes,
+        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,file_names,code_hash,unit_hashes,
           documentation_hash,instructions_hash,fingerprints_ready)
-        SELECT ?,r.slug,?,?,?,?,?,?,?,?,?,?,1 FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
+        SELECT ?,r.slug,?,?,?,?,?,?,?,?,?,?,?,1 FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
           (? IS NULL AND r.live IS NULL AND (r.owner = ? OR ?) AND NOT EXISTS
             (SELECT 1 FROM revisions WHERE slug = r.slug AND state != 'removed'))
           OR EXISTS (SELECT 1 FROM revisions p WHERE p.id = ? AND p.slug = r.slug AND
@@ -938,6 +971,7 @@ export class Cookbook {
         payload.summary,
         payload.tags,
         payload.files,
+        payload.fileNames,
         ...hashes,
         slug,
         ...match,
@@ -1022,7 +1056,7 @@ export class Cookbook {
                 slug,
               )
             : this.sql(
-                `UPDATE revisions SET state = 'removed', files = NULL
+                `UPDATE revisions SET state = 'removed', files = NULL, file_names = '{}'
                 ${target} AND state != 'removed' AND removal_reason IS NOT NULL`,
                 id,
                 slug,
@@ -1040,7 +1074,7 @@ export class Cookbook {
       case "remove_draft":
         statements = [
           this.sql(
-            `UPDATE revisions SET state = 'removed', files = NULL
+            `UPDATE revisions SET state = 'removed', files = NULL, file_names = '{}'
           ${target} AND author = ? AND state IN ('pending', 'changes') AND published_at IS NULL
             AND edit_version = ?`,
             id,
