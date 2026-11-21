@@ -53,7 +53,7 @@ const measure = (result) => {
 };
 try {
   const db = await runtime.getD1Database("DB");
-  for (const name of ["0000_cookbook", "0001_code_policy"]) {
+  for (const name of ["0000_cookbook", "0001_code_policy", "0002_revision_edit_version"]) {
     const migration = await readFile("drizzle/" + name + ".sql", "utf8");
     await db.batch(
       migration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
@@ -299,6 +299,97 @@ export function Panel(label: string) {
   });
   assert.equal(stored.files.source, 'export const example: string = "formatted"\n');
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
+  const draft = await tool("submit_recipe", {
+    ...payload,
+    slug: "editable-draft",
+    files: { source: "export const value = 1;" },
+  });
+  const draftRef = { slug: draft.slug, revision: draft.id };
+  const replace = {
+    ...payload,
+    slug: draft.slug,
+    replace: draft.id,
+    editVersion: draft.editVersion,
+    files: { source: "export const value = 2;" },
+  };
+  const review = (action, editVersion, user = "maintainer") =>
+    dispatch("/api/action", user, {
+      ...draftRef,
+      action,
+      editVersion,
+      reason: "Add the missing behavior.",
+    });
+  assert.equal((await tool("get_recipe", draftRef)).canReplace, true);
+  assert.equal(
+    (await dispatch("/api/submit", "author", { ...replace, base: draft.id })).status,
+    400,
+  );
+  assert.equal(
+    (await dispatch("/api/submit", "author", { ...replace, editVersion: undefined })).status,
+    400,
+  );
+  assert.equal((await dispatch("/api/submit", "reader", replace)).status, 409);
+  assert.equal(
+    (await dispatch("/api/submit", "author", { ...replace, files: { source: "debugger;" } }))
+      .status,
+    400,
+  );
+  assert.equal((await tool("get_recipe", draftRef)).editVersion, 0);
+  const saved = await tool("submit_recipe", replace);
+  assert.equal(saved.id, draft.id);
+  assert.equal(saved.editVersion, 1);
+  assert.equal(
+    (await tool("my_revisions", {})).filter(({ slug }) => slug === draft.slug).length,
+    1,
+  );
+  assert.equal((await dispatch("/api/submit", "author", replace)).status, 409);
+  assert.equal((await review("approve", 0)).status, 409);
+  assert.equal((await review("remove_draft", 0, "author")).status, 409);
+  assert.equal((await review("request_changes", 1)).status, 200);
+  assert.equal((await tool("get_recipe", draftRef)).canRemoveDraft, true);
+  const resubmitted = await dispatch("/api/submit", "author", {
+    ...replace,
+    editVersion: 1,
+    files: { source: "export const value = 3;" },
+  });
+  assert.equal(resubmitted.status, 200);
+  assert.equal((await resubmitted.json()).id, draft.id);
+  const updated = await tool("get_recipe", draftRef);
+  assert.equal(updated.state, "pending");
+  assert.equal(updated.review_note, null);
+  assert.match(updated.files.source, /value = 3/);
+  assert.equal((await review("approve", 2)).status, 200);
+  assert.equal(
+    (await dispatch("/api/submit", "author", { ...replace, editVersion: 2 })).status,
+    409,
+  );
+  assert.equal((await review("remove_draft", 2, "author")).status, 409);
+  assert.equal((await tool("get_recipe", draftRef)).canReplace, false);
+
+  const duplicate = await tool("submit_recipe", {
+    ...replace,
+    replace: undefined,
+    base: draft.id,
+    editVersion: undefined,
+  });
+  const duplicateRef = { slug: duplicate.slug, revision: duplicate.id };
+  const duplicateAction = (user, action) =>
+    dispatch("/api/action", user, {
+      ...duplicateRef,
+      action,
+      editVersion: duplicate.editVersion,
+      reason: "Duplicate revision.",
+    });
+  assert.notEqual(duplicate.id, draft.id);
+  assert.equal((await duplicateAction("maintainer", "request_changes")).status, 200);
+  assert.equal((await duplicateAction("reader", "remove_draft")).status, 409);
+  assert.equal((await duplicateAction("author", "remove_draft")).status, 200);
+  assert.equal(
+    (await dispatch("/api/recipe?" + new URLSearchParams(duplicateRef), "author")).status,
+    404,
+  );
+  assert.equal((await tool("get_recipe", draftRef)).state, "approved");
+
   const submitted = await tool("submit_recipe", payload);
   const revision = { slug: submitted.slug, revision: submitted.id };
   const action = (kind, user = "maintainer", reason) =>

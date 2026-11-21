@@ -204,7 +204,7 @@ if (actual !== "[[1,2],[3]]") {
     instructions: "Save the implementation as source.ts and adapt the test import to your project.",
   },
 };
-function contribute(recipe) {
+function contribute(recipe, replace = false) {
   const isRevision = Boolean(recipe?.id);
   const form = el(
     "form",
@@ -221,7 +221,9 @@ function contribute(recipe) {
             slug: data.slug,
             title: data.title,
             summary: data.summary,
-            base: recipe?.id,
+            ...(replace
+              ? { replace: recipe.id, editVersion: recipe.editVersion }
+              : { base: recipe?.id }),
             tags: data.tags
               .split(",")
               .map((value) => value.trim())
@@ -232,7 +234,12 @@ function contribute(recipe) {
                 .map((part) => [part, data[part]]),
             ),
           });
-          banner([t("revision-submitted-for-review"), ...(result.warnings ?? [])].join("\n"));
+          banner(
+            [
+              replace ? t("draft-resubmitted-for-review") : t("revision-submitted-for-review"),
+              ...(result.warnings ?? []),
+            ].join("\n"),
+          );
           location.hash = routeRecipe(result, "mine");
         } catch (error) {
           banner(error.message, true);
@@ -304,7 +311,7 @@ function contribute(recipe) {
   );
   return [
     title(
-      isRevision ? t("improve-recipe") : t("contribute-a-recipe"),
+      replace ? t("edit-draft") : isRevision ? t("improve-recipe") : t("contribute-a-recipe"),
       t("submit-a-complete-recipe-snapshot-for-review-each"),
     ),
     form,
@@ -642,6 +649,7 @@ function controls(recipe, section) {
             await api("action", {
               slug: recipe.slug,
               revision: recipe.id,
+              editVersion: recipe.editVersion,
               action,
               reason: reason.querySelector("textarea").value,
             });
@@ -722,8 +730,11 @@ async function recipePage(section, slug, revision) {
         "div",
         { className: "section" },
         buttonLink(
-          t("propose-an-improvement"),
-          "#improve/" + encodeURIComponent(recipe.slug) + "/" + encodeURIComponent(recipe.id),
+          recipe.canReplace ? t("edit-draft") : t("propose-an-improvement"),
+          (recipe.canReplace ? "#edit/" : "#improve/") +
+            encodeURIComponent(recipe.slug) +
+            "/" +
+            encodeURIComponent(recipe.id),
         ),
       ),
   ];
@@ -890,7 +901,8 @@ async function render() {
         return "";
       }
     });
-  const section = page === "recipe" ? one : page === "improve" ? "contribute" : page || "library";
+  const section =
+    page === "recipe" ? one : ["improve", "edit"].includes(page) ? "contribute" : page || "library";
   document.querySelector("#location").textContent = labels[section] ?? labels.library;
   for (const link of document.querySelectorAll(".rail nav a")) {
     if (link.hash === "#" + section) {
@@ -903,12 +915,15 @@ async function render() {
     let view;
     if (page === "recipe") {
       view = await recipePage(one, two, three);
-    } else if (page === "improve") {
+    } else if (page === "improve" || page === "edit") {
       const recipe =
-        recentRecipe?.id === two && recentRecipe.slug === one
+        page === "improve" && recentRecipe?.id === two && recentRecipe.slug === one
           ? recentRecipe
           : await api("recipe?" + new URLSearchParams({ slug: one, revision: two }));
-      view = contribute(recipe);
+      if (page === "edit" && !recipe.canReplace) {
+        throw new Error(t("draft-no-longer-editable"));
+      }
+      view = contribute(recipe, page === "edit");
     } else if (section === "contribute") {
       view = contribute();
     } else if (section === "settings") {

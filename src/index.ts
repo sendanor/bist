@@ -43,13 +43,15 @@ const tools = [
   ),
   tool(
     "submit_recipe",
-    "Submit one complete recipe snapshot for human review. For an improvement, pass its base revision ID and include all files to retain.",
+    "Submit one complete recipe snapshot for human review. Use base to create a new revision, or replace with the ID and editVersion of your unapproved revision to update it in place. Include all files to retain.",
     {
       slug: string,
       title: string,
       summary: string,
       tags: { type: "array", items: string, maxItems: 8 },
       base: string,
+      replace: string,
+      editVersion: { type: "integer", minimum: 0 },
       files: {
         type: "object",
         properties: files,
@@ -215,7 +217,8 @@ export default {
           return json(await cookbook.saveCodeSettings(await body(request)));
         }
         if (url.pathname === "/api/submit") {
-          return json(await cookbook.submit(await body(request)), 201);
+          const result = await cookbook.submit(await body(request));
+          return json(result, result.editVersion > 0 ? 200 : 201);
         }
         if (url.pathname === "/api/action") {
           return json(await cookbook.action(await body(request)));

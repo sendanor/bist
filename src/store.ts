@@ -23,6 +23,7 @@ type Revision = {
   id: string;
   slug: string;
   author: string;
+  edit_version: number;
   base: string | null;
   title: string;
   summary: string;
@@ -127,6 +128,18 @@ function revisionId(value: unknown, name: string, optional = false) {
   }
   return value;
 }
+/**
+ * Validate the version of the snapshot that the caller read.
+ * @param value Version returned by the recipe endpoint.
+ * @throws {RequestError} When the caller did not supply a valid snapshot version.
+ */
+function snapshotVersion(value: unknown) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new RequestError("Provide the recipe's current editVersion.");
+  }
+  return value;
+}
+
 export class Cookbook {
   constructor(
     private readonly db: Database,
@@ -243,8 +256,13 @@ export class Cookbook {
     ) {
       throw new RequestError("Recipe revision not found.", 404);
     }
+    const ownUnapproved =
+      row.author === this.user.id &&
+      !row.published_at &&
+      (row.state === "pending" || row.state === "changes");
     return {
       id: row.id,
+      editVersion: row.edit_version,
       slug: row.slug,
       title: row.title,
       summary: row.summary,
@@ -256,11 +274,8 @@ export class Cookbook {
       review_note: row.review_note,
       removal_reason: row.removal_reason,
       published_at: row.published_at,
-      canRemoveDraft:
-        row.author === this.user.id &&
-        !row.reviewed_by &&
-        !row.published_at &&
-        row.state === "pending",
+      canReplace: ownUnapproved && !row.removal_reason,
+      canRemoveDraft: ownUnapproved,
       canRequestRemoval: row.author === this.user.id || this.user.maintainer,
       files: decodeFiles(row.files, selected),
     };
@@ -280,6 +295,11 @@ export class Cookbook {
     const title = str(input.title, "title", 100);
     const summary = str(input.summary, "summary", 300);
     const base = revisionId(input.base, "base revision ID", true) || null;
+    const replace = revisionId(input.replace, "revision ID to replace", true) || null;
+    if (base && replace) {
+      throw new RequestError("Choose either a base revision or a revision to replace.");
+    }
+    const editVersion = replace ? snapshotVersion(input.editVersion) : 0;
     const tags = input.tags ?? [];
     if (!isArray(tags) || tags.length > 8) {
       throw new RequestError("Use up to eight tags.");
@@ -287,6 +307,37 @@ export class Cookbook {
     const normalizedTags = [...new Set(tags.map((tag) => str(tag, "tag", 32).toLowerCase()))];
     const policy = await this.readCodePolicy();
     const { files, warnings } = await this.normalizeSubmission(input.files, policy);
+    const payload = {
+      title,
+      summary,
+      tags: JSON.stringify(normalizedTags),
+      files: JSON.stringify(files),
+    };
+    const notices = warnings.length ? { warnings } : {};
+    if (replace) {
+      const updated = await this.sql(
+        `UPDATE revisions
+         SET title = ?, summary = ?, tags = ?, files = ?, edit_version = edit_version + 1,
+             state = 'pending', review_note = NULL
+         WHERE id = ? AND slug = ? AND author = ? AND edit_version = ?
+           AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL`,
+        payload.title,
+        payload.summary,
+        payload.tags,
+        payload.files,
+        replace,
+        slug,
+        this.user.id,
+        editVersion,
+      ).run();
+      if (!updated.meta.changes) {
+        throw new RequestError(
+          "This draft cannot be replaced. Reload it to check its current status.",
+          409,
+        );
+      }
+      return { slug, id: replace, state: "pending", editVersion: editVersion + 1, ...notices };
+    }
     const id = crypto.randomUUID();
     const result = await this.db.batch([
       this.sql(
@@ -305,10 +356,10 @@ export class Cookbook {
         id,
         this.user.id,
         base,
-        title,
-        summary,
-        JSON.stringify(normalizedTags),
-        JSON.stringify(files),
+        payload.title,
+        payload.summary,
+        payload.tags,
+        payload.files,
         slug,
         base,
         this.user.id,
@@ -321,7 +372,7 @@ export class Cookbook {
     if (!result[1].meta.changes) {
       throw new RequestError("Choose an accessible base revision for this recipe.", 409);
     }
-    return { slug, id, state: "pending", ...(warnings.length ? { warnings } : {}) };
+    return { slug, id, state: "pending", editVersion, ...notices };
   }
   async action(input: Input) {
     const slug = str(input.slug, "recipe slug", 64);
@@ -340,12 +391,13 @@ export class Cookbook {
         statements = [
           this.sql(
             `UPDATE revisions SET state = ?, reviewed_by = ?, review_note = ?
-          ${target} AND state = 'pending' AND removal_reason IS NULL`,
+          ${target} AND state = 'pending' AND removal_reason IS NULL AND edit_version = ?`,
             action === "approve" ? "approved" : "changes",
             this.user.id,
             reason,
             id,
             slug,
+            snapshotVersion(input.editVersion === undefined ? 0 : input.editVersion),
           ),
         ];
         break;
@@ -403,10 +455,12 @@ export class Cookbook {
         statements = [
           this.sql(
             `UPDATE revisions SET state = 'removed', files = NULL
-          ${target} AND author = ? AND state = 'pending' AND reviewed_by IS NULL AND published_at IS NULL`,
+          ${target} AND author = ? AND state IN ('pending', 'changes') AND published_at IS NULL
+            AND edit_version = ?`,
             id,
             slug,
             this.user.id,
+            snapshotVersion(input.editVersion === undefined ? 0 : input.editVersion),
           ),
         ];
         break;
@@ -432,7 +486,11 @@ export class Cookbook {
     }
     const results = await this.db.batch(statements);
     if (!results.some((result) => result.meta.changes)) {
-      throw new RequestError("This action is unavailable for the current revision.", 409);
+      const message =
+        action === "approve" || action === "request_changes"
+          ? "The revision changed or is no longer awaiting review. Reload it before reviewing."
+          : "This action is unavailable for the current revision.";
+      throw new RequestError(message, 409);
     }
     return { action, slug, id };
   }
