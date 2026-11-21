@@ -46,6 +46,9 @@ function layer(file) {
   if (path === "store.ts") {
     return "storage";
   }
+  if (path === "openai.ts") {
+    return "provider";
+  }
   if (path === "index.ts") {
     return "entry";
   }
@@ -60,7 +63,8 @@ const allowedLayers = {
   browser: ["base", "browser"],
   quality: ["base", "quality"],
   storage: ["base", "quality", "storage"],
-  entry: ["base", "quality", "storage", "asset"],
+  provider: ["base"],
+  entry: ["base", "quality", "storage", "provider", "asset"],
   asset: ["asset"],
 };
 

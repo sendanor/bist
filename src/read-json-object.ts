@@ -14,15 +14,18 @@ export class JsonBodyError extends Error {
   }
 }
 
+/** Fetch headers and body shared by incoming requests and upstream responses. */
+type JsonBody = Pick<Request, "headers" | "body">;
+
 /**
- * Read a UTF-8 JSON request body within a byte limit and require an object.
- * @param request The incoming Fetch request whose body will be consumed.
+ * Read a UTF-8 JSON body within a byte limit and require an object.
+ * @param request The Fetch message whose body will be consumed.
  * @param maxBytes The maximum number of encoded bytes to read.
  * @throws {RangeError} When the byte limit is not a positive safe integer.
  * @throws {JsonBodyError} When the body is missing, unreadable, oversized, invalid JSON, or has an unsupported content type.
  */
 export async function readJsonObject(
-  request: Request,
+  request: JsonBody,
   maxBytes: number,
 ): Promise<Record<string, unknown>> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
