@@ -9,8 +9,11 @@ import { getEncoding } from "js-tiktoken";
 import { performance } from "node:perf_hooks";
 
 const folder = await mkdtemp(join(tmpdir(), "cookbook-"));
-/** Start a test Worker using the shared temporary database directory. */
-const worker = () =>
+/**
+ * Start a test Worker using the shared temporary database directory.
+ * @param options Optional bindings and outbound fixture transport.
+ */
+const worker = (options = {}) =>
   new Miniflare({
     scriptPath: resolve("dist/server/index.js"),
     modules: true,
@@ -18,7 +21,8 @@ const worker = () =>
     compatibilityFlags: ["nodejs_compat"],
     d1Databases: { DB: "cookbook" },
     d1Persist: folder,
-    bindings: { MAINTAINER_EMAILS: "maintainer@example.test" },
+    ...options,
+    bindings: { MAINTAINER_EMAILS: "maintainer@example.test", ...options.bindings },
   });
 let runtime = worker();
 /**
@@ -140,6 +144,21 @@ try {
     .run();
 
   assert.equal((await dispatch("/api/search", null)).status, 401);
+  assert.equal((await dispatch("/assistant", null)).status, 200);
+  assert.equal((await dispatch("/api/assistant", null)).status, 401);
+  assert.equal(
+    (await dispatch("/api/assistant", "author", { question: "Find a recipe." })).status,
+    403,
+  );
+  assert.equal((await dispatch("/api/assistant/models", "reader")).status, 403);
+  assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
+    configured: false,
+    model: null,
+  });
+  assert.equal(
+    (await dispatch("/api/assistant", "maintainer", { question: "Find a recipe." })).status,
+    503,
+  );
   const payload = {
     slug: "batch-items",
     title: "Batch items into chunks",
@@ -1060,6 +1079,112 @@ describe("hasFields", () => {
     removal.items.map(({ id }) => id),
     [sampleIds.at(-1)],
   );
+  await paginationDb
+    .prepare("UPDATE revisions SET files = ? WHERE id = ?")
+    .bind(
+      JSON.stringify({
+        documentation: "Use this public recipe.",
+        instructions: "Unselected text.",
+      }),
+      sampleIds.at(-1),
+    )
+    .run();
+  const firstPrivate = sampleIds[0];
+  await paginationDb
+    .prepare("UPDATE revisions SET files = ? WHERE id = ?")
+    .bind(JSON.stringify({ documentation: "Private draft." }), firstPrivate)
+    .run();
+  await runtime.dispose();
+  const model = "fixture-model";
+  const key = "test-provider-credential";
+  let inferenceCalls = 0;
+  runtime = worker({
+    bindings: { OPENAI_API_KEY: key, OPENAI_MODEL: model },
+    /**
+     * Emulate the provider and validate the request transcript without network access.
+     * @param request The local Worker outgoing request.
+     */
+    outboundService: async (request) => {
+      assert.equal(request.headers.get("authorization"), "Bearer " + key);
+      const url = new URL(request.url);
+      assert.equal(url.origin, "https://api.openai.com");
+      if (url.pathname === "/v1/models") {
+        return Response.json({ data: [{ id: model }, { id: model }, { id: "invalid model" }] });
+      }
+      assert.equal(url.pathname, "/v1/responses");
+      const body = await request.json();
+      assert.equal(body.model, model);
+      assert.equal(body.store, false);
+      assert.equal(body.parallel_tool_calls, false);
+      assert.deepEqual(
+        body.tools.map(({ name }) => name),
+        ["search_recipes", "get_recipe"],
+      );
+      inferenceCalls++;
+      const last = body.input.at(-1);
+      let output;
+      if (inferenceCalls === 1) {
+        assert.equal(last.content, "Find the paging recipe.");
+        output = {
+          type: "function_call",
+          call_id: "blocked",
+          name: "get_recipe",
+          arguments: JSON.stringify({ slug: "paging-fixture-0" }),
+        };
+      } else if (inferenceCalls === 2) {
+        assert.match(last.output, /Could not look up/);
+        output = {
+          type: "function_call",
+          call_id: "searched",
+          name: "search_recipes",
+          arguments: JSON.stringify({ query: "paging keyword" }),
+        };
+      } else if (inferenceCalls === 3) {
+        assert.deepEqual(
+          JSON.parse(last.output).items.map(({ slug }) => slug),
+          ["paging-fixture-26"],
+        );
+        output = {
+          type: "function_call",
+          call_id: "read",
+          name: "get_recipe",
+          arguments: JSON.stringify({ slug: "paging-fixture-26" }),
+        };
+      } else if (inferenceCalls === 4) {
+        assert.deepEqual(JSON.parse(last.output).parts, {
+          documentation: { text: "Use this public recipe.", truncated: false },
+        });
+        output = {
+          type: "message",
+          content: [{ type: "output_text", text: "Use the paging recipe." }],
+        };
+      } else {
+        return Response.json({ error: { message: "Private provider failure." } }, { status: 429 });
+      }
+      return Response.json({ status: "completed", output: [output] });
+    },
+  });
+  assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
+    configured: true,
+    model,
+  });
+  assert.deepEqual(await (await dispatch("/api/assistant/models", "maintainer")).json(), {
+    status: "ready",
+    models: [model],
+  });
+  assert.equal((await dispatch("/api/assistant", "maintainer", { question: " " })).status, 400);
+  const answer = await dispatch("/api/assistant", "maintainer", {
+    question: "Find the paging recipe.",
+    model: "unapproved",
+  });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), {
+    answer: "Use the paging recipe.",
+    sources: [{ slug: "paging-fixture-26", id: sampleIds.at(-1), title: "Cursor sample" }],
+  });
+  const limited = await dispatch("/api/assistant", "maintainer", { question: "Try again." });
+  assert.equal(limited.status, 429);
+  assert.doesNotMatch(await limited.text(), /Private provider failure/);
   console.log(
     JSON.stringify({
       passed:

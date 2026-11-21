@@ -1,7 +1,13 @@
 import { isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
-import { Cookbook, RequestError, type Database, type Input } from "./store";
+import { Cookbook, RequestError, str, type Database, type Input } from "./store";
+import {
+  fetchOpenAiModelCatalog,
+  isOpenAiModel,
+  OpenAiError,
+  runOpenAiAssistant,
+} from "./openai.ts";
 import html from "./page.html";
 import css from "./styles.css";
 import browser from "cookbook:browser";
@@ -9,6 +15,8 @@ import browser from "cookbook:browser";
 interface Env {
   DB: Database;
   MAINTAINER_EMAILS?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_MODEL?: string;
 }
 const string = { type: "string" };
 const listing = {
@@ -246,6 +254,47 @@ async function mcp(request: Request, cookbook: Cookbook | null) {
   }
 }
 
+/**
+ * Answer with published recipe content and return links for recipes actually read.
+ * @param request Authenticated request containing a single question.
+ * @param env Server-only deployment bindings.
+ * @param cookbook Cookbook with the current viewer's access.
+ * @throws {RequestError} When the integration is unconfigured or the question is invalid.
+ */
+async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
+  const key = env.OPENAI_API_KEY?.trim();
+  const model = env.OPENAI_MODEL?.trim();
+  if (!key || !isOpenAiModel(model)) {
+    throw new RequestError("Configure OpenAI in the hosted runtime before asking a question.", 503);
+  }
+  const input = await readJsonObject(request, 16_000);
+  const question = str(input.question, "a question", 4_000);
+  const sources = new Map<string, { slug: string; id: string; title: string }>();
+  const answer = await runOpenAiAssistant({ key, model }, question, async (name, value) => {
+    if (name === "search_recipes") {
+      const { items } = await cookbook.search({ query: value, limit: 6 });
+      return { items: items.map(({ slug, title, summary }) => ({ slug, title, summary })) };
+    }
+    // The published pointer is the only revision selector the model may use.
+    const { slug, id, title, files } = await cookbook.get({
+      slug: value,
+      parts: ["documentation", "source"],
+    });
+    sources.set(slug, { slug, id, title });
+    return {
+      slug,
+      title,
+      parts: Object.fromEntries(
+        Object.entries(files).map(([part, text]) => [
+          part,
+          { text: text.slice(0, 3_000), truncated: text.length > 3_000 },
+        ]),
+      ),
+    };
+  });
+  return json({ answer, sources: [...sources.values()] });
+}
+
 export default {
   /**
    * Route application, API, and MCP traffic in the Worker.
@@ -285,6 +334,12 @@ export default {
       if (!cookbook) {
         throw new RequestError("Sign in with ChatGPT to access the cookbook.", 401);
       }
+      if (
+        (url.pathname === "/api/assistant" || url.pathname === "/api/assistant/models") &&
+        !maintainer
+      ) {
+        throw new RequestError("Maintainer access required.", 403);
+      }
       if (request.method === "GET") {
         const input = Object.fromEntries(url.searchParams);
         switch (url.pathname) {
@@ -292,6 +347,20 @@ export default {
             return json(await cookbook.codeSettings());
           case "/api/session":
             return json({ maintainer });
+          case "/api/assistant": {
+            const model = env.OPENAI_MODEL?.trim();
+            return json({
+              configured: Boolean(env.OPENAI_API_KEY?.trim()) && isOpenAiModel(model),
+              model: isOpenAiModel(model) ? model : null,
+            });
+          }
+          case "/api/assistant/models": {
+            const key = env.OPENAI_API_KEY?.trim();
+            if (!key) {
+              throw new RequestError("Configure OpenAI in the hosted runtime first.", 503);
+            }
+            return json(await fetchOpenAiModelCatalog(key));
+          }
           case "/api/search":
             return json(await cookbook.search(input));
           case "/api/recipe":
@@ -309,6 +378,9 @@ export default {
         if (url.pathname === "/api/settings") {
           return json(await cookbook.saveCodeSettings(await body(request)));
         }
+        if (url.pathname === "/api/assistant") {
+          return await askAssistant(request, env, cookbook);
+        }
         if (url.pathname === "/api/submit") {
           const result = await cookbook.submit(await body(request));
           return json(result, result.editVersion > 0 ? 200 : 201);
@@ -324,7 +396,11 @@ export default {
     } catch (error) {
       return json(
         { error: message(error), code: error instanceof RequestError ? error.code : undefined },
-        error instanceof RequestError || error instanceof JsonBodyError ? error.status : 500,
+        error instanceof RequestError ||
+          error instanceof JsonBodyError ||
+          error instanceof OpenAiError
+          ? error.status
+          : 500,
       );
     }
   },

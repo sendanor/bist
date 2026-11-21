@@ -1416,6 +1416,11 @@ main,
   min-height: 15rem;
 }
 
+.assistant-answer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .rule-matches {
   display: flex;
   flex-wrap: wrap;

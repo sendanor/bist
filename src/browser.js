@@ -23,6 +23,7 @@ const labels = {
   mine: t("my-revisions"),
   review: t("review-queue"),
   settings: t("settings"),
+  assistant: t("assistant"),
 };
 const parts = {
   documentation: t("documentation"),
@@ -1567,6 +1568,92 @@ async function settingsPage() {
   return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
 }
 
+/** Build the maintainer's published-recipe assistant and its model access check. */
+async function assistantPage() {
+  const { configured, model } = await api("assistant");
+  const heading = title(t("assistant"), t("assistant-description"));
+  if (!configured) {
+    return [heading, el("p", { className: "panel" }, t("assistant-unconfigured"))];
+  }
+  const modelStatus = el("p", { role: "status", className: "muted" });
+  const check = btn(t("assistant-check-model"), async () => {
+    check.disabled = true;
+    modelStatus.textContent = "";
+    try {
+      const catalog = await api("assistant/models");
+      if (catalog.status === "ready") {
+        modelStatus.textContent = catalog.models.includes(model)
+          ? t("assistant-model-found")
+          : t("assistant-model-missing");
+      } else {
+        modelStatus.textContent =
+          catalog.status === "unauthorized"
+            ? t("assistant-model-unauthorized")
+            : t("assistant-model-unavailable");
+      }
+    } catch (error) {
+      modelStatus.textContent = error.message;
+    } finally {
+      check.disabled = false;
+    }
+  });
+  const result = el("div", { "aria-live": "polite" });
+  const ask = el("button", { className: "primary" }, t("assistant-ask"));
+  return [
+    heading,
+    el("div", { className: "actions" }, el("code", {}, model), check),
+    modelStatus,
+    el(
+      "form",
+      {
+        className: "panel form",
+        /**
+         * Send a single question and show the response and verified recipe links.
+         * @param event Form submission event from the maintainer.
+         */
+        onsubmit: async (event) => {
+          event.preventDefault();
+          const question = new FormData(event.currentTarget).get("question").trim();
+          if (!question) {
+            return;
+          }
+          ask.disabled = true;
+          result.textContent = t("assistant-working");
+          try {
+            const { answer, sources } = await api("assistant", { question });
+            result.replaceChildren(
+              el("div", { className: "assistant-answer" }, answer),
+              sources.length
+                ? el(
+                    "ul",
+                    {},
+                    ...sources.map((source) =>
+                      el("li", {}, el("a", { href: routeRecipe(source, "library") }, source.title)),
+                    ),
+                  )
+                : null,
+            );
+          } catch (error) {
+            result.textContent = error.message;
+          } finally {
+            ask.disabled = false;
+          }
+        },
+      },
+      field(
+        "question",
+        t("assistant-question"),
+        { maxlength: 4000, rows: 4, required: "" },
+        "",
+        true,
+      ),
+      el("p", { className: "muted" }, t("assistant-data-use")),
+      el("div", { className: "actions" }, ask),
+    ),
+    result,
+  ];
+}
+
 /** Render the current page path and discard stale asynchronous results. */
 async function render() {
   const current = ++renderId;
@@ -1609,6 +1696,8 @@ async function render() {
       view = contribute();
     } else if (section === "settings") {
       view = await settingsPage();
+    } else if (section === "assistant") {
+      view = await assistantPage();
     } else {
       view = await listingPage(section);
       if (current === renderId) {
@@ -1674,7 +1763,7 @@ function navigate(path) {
 upgradeLegacyRoute();
 try {
   ({ maintainer } = await api("session"));
-  for (const route of ["review", "settings"]) {
+  for (const route of ["review", "settings", "assistant"]) {
     document.querySelector(`.rail nav a[href="/${route}"]`).hidden = !maintainer;
   }
   document.addEventListener("click", (event) => {

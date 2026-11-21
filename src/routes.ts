@@ -1,6 +1,6 @@
 import { isRevisionId } from "./guards.ts";
 
-const sections = new Set(["library", "contribute", "mine", "review", "settings"]);
+const sections = new Set(["library", "contribute", "mine", "review", "settings", "assistant"]);
 const recipeSections = new Set(["library", "mine", "review"]);
 
 /**

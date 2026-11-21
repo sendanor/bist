@@ -91,6 +91,21 @@ D1 database binding named `DB`. To prepare an instance-specific configuration, c
 hosted runtime. Apply the [D1 migrations](drizzle/) to the instance database. Keep deployment
 settings and credentials outside the public repository.
 
+### OpenAI assistant
+
+The optional **Assistant** page lets maintainers ask questions about published recipes.
+In ChatGPT Sites, add `OPENAI_API_KEY` as a secret environment variable on the Site.
+Set `OPENAI_MODEL` in the Worker runtime to a model your project can use with the
+Responses API and function calling. Keep the API key out of Git and the browser.
+The **Check model access** button checks
+whether the configured model appears in the key's model catalog. Ask a question to
+verify inference and tool support. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+
+The assistant sends each question and any published recipe excerpts it uses to OpenAI.
+Bist does not save the conversation. The assistant can search published recipes and read
+their source and documentation. Submitted drafts and private review feedback stay outside
+its tool scope.
+
 ## Development
 
 From the repository root, after `npm ci`, run the repository checks and tests.
