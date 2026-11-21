@@ -7,6 +7,7 @@ import {
   validateCodePolicy,
 } from "./code-policy";
 import { normalizeFiles, parts } from "./format";
+import { fingerprintRecipe } from "./quality/recipe-hash";
 export interface Statement {
   bind(...values: unknown[]): Statement;
   first<T>(): Promise<T | null>;
@@ -38,6 +39,19 @@ type Revision = {
   removal_reason: string | null;
   removal_by: string | null;
 };
+/** Stored code snapshot awaiting fingerprint generation after migration. */
+interface LegacySnapshot {
+  readonly id: string;
+  readonly files: string;
+  readonly edit_version: number;
+}
+
+const matchingSnapshot = `
+  SELECT 1 FROM revisions
+  WHERE code_hash = ? AND state NOT IN ('removed', 'quarantined')
+    AND (author = ? OR state = 'published') AND id != COALESCE(?, '')
+`;
+
 const fields = "v.id, v.slug, v.title, v.summary, v.tags, v.state, v.created, v.published_at";
 /**
  * Decode stored revision tags before exposing them to API readers.
@@ -287,6 +301,56 @@ export class Cookbook {
       throw new RequestError(error instanceof Error ? error.message : "Recipe validation failed.");
     }
   }
+  /**
+   * Index snapshots created before fingerprints were introduced.
+   * @throws {RequestError} When more legacy snapshots remain for a later request.
+   */
+  private async indexLegacySnapshots() {
+    const limit = 24;
+    const { results } = await this.sql(
+      "SELECT id, files, edit_version FROM revisions WHERE code_hash IS NULL AND files IS NOT NULL ORDER BY id LIMIT ?",
+      limit + 1,
+    ).all<LegacySnapshot>();
+    const statements = [];
+    for (const row of results.slice(0, limit)) {
+      const files = decodeFiles(row.files, parts);
+      const { snapshot, units } = await fingerprintRecipe(files);
+      statements.push(
+        this.sql(
+          "UPDATE revisions SET code_hash = ?, unit_hashes = ? WHERE id = ? AND edit_version = ? AND code_hash IS NULL AND files IS NOT NULL",
+          snapshot,
+          JSON.stringify(units),
+          row.id,
+          row.edit_version,
+        ),
+      );
+    }
+    if (statements.length) {
+      await this.db.batch(statements);
+    }
+    if (results.length > limit) {
+      throw new RequestError(
+        "Older revisions are still being indexed. Retry submission to continue.",
+        503,
+      );
+    }
+  }
+
+  private async assertNoDuplicate(hash: string, except: string | null) {
+    const existing = await this.sql(
+      matchingSnapshot + " LIMIT 1",
+      hash,
+      this.user.id,
+      except,
+    ).first();
+    if (existing) {
+      throw new RequestError(
+        "The same code is already saved in one of your revisions or a published recipe.",
+        409,
+      );
+    }
+  }
+
   async submit(input: Input) {
     const slug = str(input.slug, "recipe slug", 64);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
@@ -307,30 +371,40 @@ export class Cookbook {
     const normalizedTags = [...new Set(tags.map((tag) => str(tag, "tag", 32).toLowerCase()))];
     const policy = await this.readCodePolicy();
     const { files, warnings } = await this.normalizeSubmission(input.files, policy);
+    await this.indexLegacySnapshots();
+    const { snapshot, units } = await fingerprintRecipe(files);
     const payload = {
       title,
       summary,
       tags: JSON.stringify(normalizedTags),
       files: JSON.stringify(files),
+      units: JSON.stringify(units),
     };
     const notices = warnings.length ? { warnings } : {};
     if (replace) {
       const updated = await this.sql(
         `UPDATE revisions
          SET title = ?, summary = ?, tags = ?, files = ?, edit_version = edit_version + 1,
-             state = 'pending', review_note = NULL
+             state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?
          WHERE id = ? AND slug = ? AND author = ? AND edit_version = ?
-           AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL`,
+           AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL
+           AND NOT EXISTS (${matchingSnapshot})`,
         payload.title,
         payload.summary,
         payload.tags,
         payload.files,
+        snapshot,
+        payload.units,
         replace,
         slug,
         this.user.id,
         editVersion,
+        snapshot,
+        this.user.id,
+        replace,
       ).run();
       if (!updated.meta.changes) {
+        await this.assertNoDuplicate(snapshot, replace);
         throw new RequestError(
           "This draft cannot be replaced. Reload it to check its current status.",
           409,
@@ -341,14 +415,17 @@ export class Cookbook {
     const id = crypto.randomUUID();
     const result = await this.db.batch([
       this.sql(
-        "INSERT OR IGNORE INTO recipes(slug, owner) SELECT ?, ? WHERE ? IS NULL",
+        `INSERT OR IGNORE INTO recipes(slug, owner) SELECT ?, ? WHERE ? IS NULL AND NOT EXISTS (${matchingSnapshot})`,
         slug,
         this.user.id,
         base,
+        snapshot,
+        this.user.id,
+        null,
       ),
       this.sql(
-        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files)
-        SELECT ?,r.slug,?,?,?,?,?,? FROM recipes r WHERE r.slug = ? AND (
+        `INSERT INTO revisions(id,slug,author,base,title,summary,tags,files,code_hash,unit_hashes)
+        SELECT ?,r.slug,?,?,?,?,?,?,?,? FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
           (? IS NULL AND r.live IS NULL AND (r.owner = ? OR ?) AND NOT EXISTS
             (SELECT 1 FROM revisions WHERE slug = r.slug AND state != 'removed'))
           OR EXISTS (SELECT 1 FROM revisions p WHERE p.id = ? AND p.slug = r.slug AND
@@ -360,7 +437,12 @@ export class Cookbook {
         payload.summary,
         payload.tags,
         payload.files,
+        snapshot,
+        payload.units,
         slug,
+        snapshot,
+        this.user.id,
+        null,
         base,
         this.user.id,
         this.user.maintainer,
@@ -370,6 +452,7 @@ export class Cookbook {
       ),
     ]);
     if (!result[1].meta.changes) {
+      await this.assertNoDuplicate(snapshot, null);
       throw new RequestError("Choose an accessible base revision for this recipe.", 409);
     }
     return { slug, id, state: "pending", editVersion, ...notices };

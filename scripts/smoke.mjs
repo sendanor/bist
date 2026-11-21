@@ -53,7 +53,12 @@ const measure = (result) => {
 };
 try {
   const db = await runtime.getD1Database("DB");
-  for (const name of ["0000_cookbook", "0001_code_policy", "0002_revision_edit_version"]) {
+  for (const name of [
+    "0000_cookbook",
+    "0001_code_policy",
+    "0002_revision_edit_version",
+    "0003_recipe_fingerprints",
+  ]) {
     const migration = await readFile("drizzle/" + name + ".sql", "utf8");
     await db.batch(
       migration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
@@ -102,6 +107,65 @@ try {
   assert.doesNotMatch(shell, /\{\{t:/);
 
   const submit = (slug, files) => dispatch("/api/submit", "author", { ...payload, slug, files });
+  const legacySlug = "legacy-fingerprint";
+  const legacyId = crypto.randomUUID();
+  const legacyFiles = { source: "export const legacy = {label: 'keep two  spaces'};" };
+  await db
+    .prepare("INSERT INTO recipes (slug, owner) VALUES (?, ?)")
+    .bind(legacySlug, "author")
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO revisions (id, slug, author, title, summary, tags, files) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      legacyId,
+      legacySlug,
+      "author",
+      "Legacy",
+      "A legacy fixture before indexing.",
+      "[]",
+      JSON.stringify(legacyFiles),
+    )
+    .run();
+  const sameCode = { source: 'export const legacy = {\n  label: "keep two  spaces",\n};' };
+  const repeated = await submit("legacy-duplicate", sameCode);
+  assert.equal(repeated.status, 409);
+  assert.match((await repeated.json()).error, /same code/);
+  const fingerprints = await db
+    .prepare("SELECT code_hash, unit_hashes FROM revisions WHERE id = ?")
+    .bind(legacyId)
+    .first();
+  assert.match(fingerprints.code_hash, /^[a-f0-9]{64}$/u);
+  assert.match(JSON.parse(fingerprints.unit_hashes).source, /^[a-f0-9]{64}$/u);
+  assert.equal(
+    await db.prepare("SELECT slug FROM recipes WHERE slug = 'legacy-duplicate'").first(),
+    null,
+  );
+  const privateMatch = await dispatch("/api/submit", "reader", {
+    ...payload,
+    slug: "private-match",
+    files: sameCode,
+  });
+  assert.equal(privateMatch.status, 201);
+  const metadataEdit = await dispatch("/api/submit", "author", {
+    ...payload,
+    slug: legacySlug,
+    replace: legacyId,
+    editVersion: 0,
+    files: sameCode,
+  });
+  assert.equal(metadataEdit.status, 200);
+  const changedLiteral = await submit("legacy-different", {
+    source: 'export const legacy = { label: "keep two spaces" };',
+  });
+  assert.equal(changedLiteral.status, 201);
+  const concurrent = await Promise.allSettled([
+    submit("simultaneous-a", { source: "export const concurrent = 12345;" }),
+    submit("simultaneous-b", { source: "export const concurrent = 12345;" }),
+  ]);
+  assert.deepEqual(concurrent.map((result) => result.value?.status).sort(), [201, 409]);
+
   const violationsByPart = [
     ["undeclared", { source: "missing();" }, /source:1:1.*undeclared-value/i],
     ["constant", { source: "const id = 1; id = 2;" }, /no-const-assign/],
@@ -450,9 +514,20 @@ export function Panel(label: string) {
   }
   const reuseMs = performance.now() - start;
   const full = await tool("get_recipe", { slug: payload.slug }, "reader");
+  const publishedDuplicate = await dispatch("/api/submit", "reader", {
+    ...payload,
+    slug: "duplicate-of-public-recipe",
+  });
+  assert.equal(publishedDuplicate.status, 409);
+  assert.match((await publishedDuplicate.json()).error, /same code/);
   const next = await tool(
     "submit_recipe",
-    { ...payload, base: submitted.id, summary: "A proposed revision." },
+    {
+      ...payload,
+      base: submitted.id,
+      summary: "A proposed revision.",
+      files: { ...payload.files, styles: ".recipe-preview { color: red; }" },
+    },
     "reader",
   );
   assert.equal((await tool("search_recipes", {}, "reader"))[0].id, submitted.id);
