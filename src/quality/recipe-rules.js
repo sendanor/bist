@@ -6,6 +6,13 @@ export const virtualFiles = Object.freeze({
   tests: "tests.tsx",
 });
 
+export const defaultRecipeNames = Object.freeze({
+  ...virtualFiles,
+  styles: "styles.css",
+  documentation: "README.md",
+  instructions: "AGENTS.md",
+});
+
 const relativeParts = new Map([
   ["./source", "source"],
   ["./source.ts", "source"],
@@ -23,10 +30,31 @@ const relativeParts = new Map([
 /**
  * Resolve a supported file alias within a recipe snapshot.
  * @param {string} path Literal module specifier written by the author.
+ * @param {Partial<Record<keyof typeof virtualFiles, string>>} names Custom names for submitted parts.
  * @returns {keyof typeof virtualFiles | undefined}
  */
-export function resolveRecipePart(path) {
-  return /** @type {keyof typeof virtualFiles | undefined} */ (relativeParts.get(path));
+export function resolveRecipePart(path, names = {}) {
+  const entries = Object.entries(virtualFiles);
+  const exact = entries.find(([part, fallback]) => path === "./" + (names[part] ?? fallback));
+  if (exact) {
+    return /** @type {keyof typeof virtualFiles} */ (exact[0]);
+  }
+  const legacy = relativeParts.get(path);
+  if (legacy && (!names[legacy] || names[legacy] === virtualFiles[legacy])) {
+    return /** @type {keyof typeof virtualFiles} */ (legacy);
+  }
+  const matches = entries.filter(([part]) => {
+    const name = names[part];
+    if (!name) {
+      return false;
+    }
+    const stem = name.replace(/(?:\.d)?\.[^.]+$/u, "");
+    const js = name.endsWith(".mts") ? ".mjs" : name.endsWith(".cts") ? ".cjs" : ".js";
+    return path === "./" + stem || path === "./" + stem + js;
+  });
+  return matches.length === 1
+    ? /** @type {keyof typeof virtualFiles} */ (matches[0][0])
+    : undefined;
 }
 
 export const recipeRules = {
@@ -58,17 +86,20 @@ export const recipeRules = {
           });
           return;
         }
-        const origin = context.filename;
-        const target = resolveRecipePart(path);
+        const names = context.settings.cookbookFileNames;
+        const origin = Object.keys(virtualFiles).find(
+          (part) => (names?.[part] ?? virtualFiles[part]) === context.filename,
+        );
+        const target = resolveRecipePart(path, names);
         let message;
         if (target) {
           if (!context.settings.cookbookParts.includes(target)) {
             message = `Recipe part '${target}' is missing.`;
-          } else if (virtualFiles[target] === origin) {
+          } else if (target === origin) {
             message = "A part cannot import itself.";
           } else if (
-            (origin === virtualFiles.source && target === "tests") ||
-            (origin === virtualFiles.interface && target !== "interface")
+            (origin === "source" && target === "tests") ||
+            (origin === "interface" && target !== "interface")
           ) {
             message =
               "Source cannot depend on its tests, and its public interface must stand on its own.";

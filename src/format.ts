@@ -17,7 +17,7 @@ import { analyze } from "@typescript-eslint/scope-manager";
 import { visitorKeys } from "@typescript-eslint/visitor-keys";
 import { bundledRules, defaultCodePolicy, type Policy } from "./code-policy";
 import { normalizeStyles } from "./quality/css";
-import { virtualFiles } from "./quality/recipe-rules.js";
+import { defaultRecipeNames, virtualFiles } from "./quality/recipe-rules.js";
 import { checkRecipeTypes } from "./quality/recipe-types";
 import { spaceDeclarations } from "./quality/declaration-spacing.js";
 
@@ -30,6 +30,58 @@ export const parts = [
   "styles",
 ] as const;
 export type Part = (typeof parts)[number];
+
+export type RecipeFileNames = Partial<Record<Part, string>>;
+
+const extensions: Readonly<Record<Part, RegExp>> = {
+  source: /\.(?:[cm]?[jt]s|[jt]sx)$/u,
+  tests: /\.(?:[cm]?[jt]s|[jt]sx)$/u,
+  interface: /\.(?:ts|[cm]ts)$/u,
+  styles: /\.css$/u,
+  documentation: /\.(?:md|markdown|txt)$/u,
+  instructions: /\.(?:md|markdown|txt)$/u,
+};
+
+/**
+ * Resolve optional custom filenames for the included parts, preserving inherited names.
+ * @param value Submitted filename overrides, with an empty string restoring the default.
+ * @param included Parts containing content in the current submission.
+ * @param inherited Filenames from the previous edit or base recipe.
+ * @throws {Error} When a name is unsupported, targets an absent part or collides with another name.
+ */
+export function recipeFileNames(
+  value: unknown,
+  included: readonly Part[],
+  inherited: RecipeFileNames = {},
+): RecipeFileNames {
+  if (value !== undefined && !isRecord(value)) {
+    throw new Error("Provide a fileNames object.");
+  }
+  const overrides = value ?? {};
+  if (Object.keys(overrides).some((part) => !included.some((name) => name === part))) {
+    throw new Error("Filenames must refer to parts included in this recipe.");
+  }
+  const used = new Set<string>();
+  const names: RecipeFileNames = {};
+  for (const part of included) {
+    const name = Object.hasOwn(overrides, part) ? overrides[part] : inherited[part];
+    const filename = name === "" || name === undefined ? defaultRecipeNames[part] : name;
+    if (
+      !isString(filename) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(filename) ||
+      !extensions[part].test(filename)
+    ) {
+      throw new Error(`Use a filename with a supported extension and no directory for ${part}.`);
+    }
+    const canonical = filename.toLowerCase();
+    if (used.has(canonical)) {
+      throw new Error(`Filename '${filename}' is already used by another part.`);
+    }
+    used.add(canonical);
+    names[part] = filename;
+  }
+  return names;
+}
 
 /**
  * Keep diagnostic messages within the response's display budget.
@@ -47,8 +99,15 @@ function limitDiagnostics(messages: readonly string[]) {
  * Apply the maintainer's policy to authored recipe files before saving.
  * @param value The unvalidated snapshot with authored files by part.
  * @param policy The effective lint and formatting policy for the revision.
+ * @param requestedNames Optional filename overrides for the submitted parts.
+ * @param inheritedNames Previous filenames, used when an override is omitted.
  */
-export async function normalizeFiles(value: unknown, policy: Policy = defaultCodePolicy) {
+export async function normalizeFiles(
+  value: unknown,
+  policy: Policy = defaultCodePolicy,
+  requestedNames?: unknown,
+  inheritedNames?: RecipeFileNames,
+) {
   const { blankLinesBetweenDeclarations, ...prettier } = policy.prettier;
   if (!isRecord(value)) {
     throw new Error("Provide a files object.");
@@ -72,6 +131,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
   if (!recipeParts.length) {
     throw new Error("Provide at least one non-empty recipe part.");
   }
+  const fileNames = recipeFileNames(requestedNames, recipeParts, inheritedNames);
   const hasTypeScript = recipeParts.some((part) => Object.hasOwn(virtualFiles, part));
   const linter = hasTypeScript ? new Linter({ configType: "eslintrc" }) : null;
   if (linter) {
@@ -114,6 +174,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
       continue;
     }
     const part = key as keyof typeof virtualFiles;
+    const filename = fileNames[part] ?? virtualFiles[part];
     const rules = { ...policy.eslint, ...policy.overrides[part] };
     sources[part] = content;
     let formatted: string;
@@ -208,9 +269,13 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
           env: { es2022: true },
           rules,
           globals: policy.globals,
-          settings: { ...policy.settings, cookbookParts: recipeParts },
+          settings: {
+            ...policy.settings,
+            cookbookParts: recipeParts,
+            cookbookFileNames: fileNames,
+          },
         },
-        { filename: virtualFiles[part], allowInlineConfig: false },
+        { filename, allowInlineConfig: false },
       );
       /**
        * Format a lint diagnostic with its recipe part and location.
@@ -223,7 +288,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
       }
     }
     const spaced = blankLinesBetweenDeclarations
-      ? spaceDeclarations(formatted, virtualFiles[part])
+      ? spaceDeclarations(formatted, filename)
       : formatted;
     if (encoder.encode(spaced).length > 12000) {
       throw new Error(`${key} exceeds 12 KB after formatting.`);
@@ -232,7 +297,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
   }
   if (hasTypeScript && policy.quality.typeCheck !== "off" && errors.length === 0) {
     const target = policy.quality.typeCheck === "error" ? errors : warnings;
-    target.push(...checkRecipeTypes(sources, 20));
+    target.push(...checkRecipeTypes(sources, 20, fileNames));
   }
   if (policy.quality.warningsAsErrors) {
     errors.push(...warnings);
@@ -240,5 +305,5 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
   if (errors.length) {
     throw new Error(limitDiagnostics(errors).join("\n"));
   }
-  return { files: result, warnings: limitDiagnostics(warnings) };
+  return { files: result, fileNames, warnings: limitDiagnostics(warnings) };
 }
