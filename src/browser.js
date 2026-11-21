@@ -1428,25 +1428,35 @@ const actionDescriptions = {
 };
 
 /**
- * Show model findings beside the affected recipe filenames.
- * @param warnings Validated findings, each associated with one stored file part.
- * @param names Filenames from the selected revision.
+ * Show saved findings from submission and later rechecks beside their filenames.
+ * @param recipe Stored revision with filenames and any warnings visible to the viewer.
  */
-function llmWarningList(warnings, names) {
-  return el(
-    "ul",
-    {},
-    ...warnings.map(({ part, reason }) =>
-      el("li", {}, el("strong", {}, names?.[part] ?? parts[part]), " — ", reason),
-    ),
-  );
+function revisionWarnings(recipe) {
+  const heading = el("h2", { id: "revision-warnings-heading" }, t("llm-review-saved-warnings"));
+  const list = el("ul");
+  const view = el("section", { className: "panel", "aria-labelledby": heading.id }, heading, list);
+  /**
+   * Display the saved warnings returned for this edit and hide the section when empty.
+   * @param warnings All findings visible to the viewer on the selected revision.
+   */
+  function update(warnings) {
+    list.replaceChildren(
+      ...warnings.map(({ part, reason }) =>
+        el("li", {}, el("strong", {}, recipe.fileNames?.[part] ?? parts[part]), " — ", reason),
+      ),
+    );
+    view.hidden = !warnings.length;
+  }
+  update(recipe.llmWarnings ?? []);
+  return { view, update };
 }
 
 /**
  * Present a fresh, advisory check for this open revision, including its pending and empty states.
  * @param recipe Stored snapshot with its revision ID, edit version and filenames.
+ * @param showWarnings Refresh the revision's saved warnings after a successful check.
  */
-function revisionRecheck(recipe) {
+function revisionRecheck(recipe, showWarnings) {
   const heading = el(
     "h2",
     { id: "revision-recheck-heading", tabindex: "-1" },
@@ -1466,7 +1476,7 @@ function revisionRecheck(recipe) {
     details,
   );
   let running = false;
-  /** Run the current rules once per explicit request and keep results in this view. */
+  /** Run the current rules once per request and show the findings saved by the server. */
   async function run() {
     view.hidden = false;
     heading.focus();
@@ -1483,6 +1493,7 @@ function revisionRecheck(recipe) {
         revision: recipe.id,
         editVersion: recipe.editVersion,
       });
+      showWarnings(report.savedWarnings);
       if (!report.checkedParts.length) {
         status.textContent = t("llm-recheck-empty");
         return;
@@ -1490,9 +1501,6 @@ function revisionRecheck(recipe) {
       status.textContent = report.warnings.length
         ? t("llm-recheck-warnings")
         : t("llm-recheck-clean");
-      if (report.warnings.length) {
-        details.append(llmWarningList(report.warnings, recipe.fileNames));
-      }
       const names = report.checkedParts.map((part) => recipe.fileNames?.[part] ?? parts[part]);
       details.append(
         el(
@@ -1758,7 +1766,8 @@ async function recipePage(section, slug, revision) {
     }
   }
   recentRecipe = recipe;
-  const recheck = maintainer ? revisionRecheck(recipe) : null;
+  const warnings = revisionWarnings(recipe);
+  const recheck = maintainer ? revisionRecheck(recipe, warnings.update) : null;
   const filters = new URL(listingPaths.get(section) ?? "/" + section, location.origin).searchParams;
   return {
     actions: revisionControls(recipe, section, recheck?.run),
@@ -1785,13 +1794,7 @@ async function recipePage(section, slug, revision) {
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
       recipe.removal_reason &&
         el("p", { className: "panel" }, t("removal-requested") + recipe.removal_reason),
-      recipe.llmWarnings?.length &&
-        el(
-          "section",
-          { className: "panel" },
-          el("h2", {}, t("llm-review-acknowledged")),
-          llmWarningList(recipe.llmWarnings, recipe.fileNames),
-        ),
+      warnings.view,
       fileViewer(recipe, base),
       el(
         "dl",

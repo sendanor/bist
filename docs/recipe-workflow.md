@@ -151,9 +151,11 @@ needs it. The MCP server receives the configured public query and optional libra
 To try the current rules on an existing recipe, open its revision and choose
 **Revision actions → Re-run LLM review**. A maintainer can run a fresh check on every
 present file with an enabled rule, including files saved before LLM review was configured.
-The results appear in the open revision. Both **Warn** and **Block** produce advisory
-warnings here. Submission and publication status stay as they were. Dismiss the report
-when finished, or run the action again after changing the rules.
+Both **Warn** and **Block** save advisory findings under **Saved LLM warnings**. The
+author and maintainers can reopen the revision to see them alongside warnings the author
+acknowledged at submission. Each distinct finding appears once per file. A later clean
+check preserves earlier findings. Editing or removing a file through submission clears
+its old warnings and applies the current rules to any new content.
 
 ## Run a recipe's tests
 
