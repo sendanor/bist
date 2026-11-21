@@ -2059,87 +2059,101 @@ async function codePolicyPage() {
 }
 
 /**
- * Refresh the skill choices while retaining a selected skill that is still available.
- * @param select The Assistant's response skill control.
- * @param skills Identifiers currently allowed by the maintainer.
+ * Keep enough recent chat text for follow-up questions within the request budget.
+ * @param turns Successful user and assistant messages from this panel.
  */
-function updateResponseSkills(select, skills) {
-  const current = select.value;
-  select.replaceChildren(
-    el("option", { value: "" }, t("assistant-skill-default")),
-    ...skills.map((id) => el("option", { value: id }, responseSkillLabels[id])),
-  );
-  select.value = skills.includes(current) ? current : "";
-  select.closest("label").hidden = !skills.length;
+function recentAssistantHistory(turns) {
+  const history = turns
+    .slice(-8)
+    .map(({ role, content }) => ({ role, content: content.slice(0, 1_200) }));
+  const encoder = new TextEncoder();
+  while (encoder.encode(JSON.stringify(history)).byteLength > 12_000) {
+    history.shift();
+  }
+  return history;
 }
 
-/** Build the persistent Assistant panel content and its model access check. */
+/** Build the Assistant transcript and composer, both retained across navigation. */
 async function assistantContent() {
-  const { configured, model, docsSearch, context7Search, skills } = await api("assistant");
+  const { configured, docsSearch, context7Search } = await api("assistant");
   if (!configured) {
     return [
-      el(
-        "div",
-        { className: "panel" },
-        el("p", {}, t("assistant-unconfigured")),
-        buttonLink(t("openai-settings"), "/settings/openai"),
-      ),
+      el("p", {}, t("assistant-unconfigured")),
+      buttonLink(t("openai-settings"), "/settings/openai"),
     ];
   }
-  const modelStatus = el("p", { role: "status", className: "muted" });
-  const check = btn(t("assistant-check-model"), async () => {
-    check.disabled = true;
-    modelStatus.textContent = "";
-    try {
-      const catalog = await api("assistant/models");
-      if (catalog.status === "ready") {
-        modelStatus.textContent = catalog.models.includes(model)
-          ? t("assistant-model-found")
-          : t("assistant-model-missing");
-      } else {
-        modelStatus.textContent =
-          catalog.status === "unauthorized"
-            ? t("assistant-model-unauthorized")
-            : t("assistant-model-unavailable");
-      }
-    } catch (error) {
-      modelStatus.textContent = error.message;
-    } finally {
-      check.disabled = false;
-    }
+
+  const turns = [];
+  const transcript = el("div", { className: "assistant-transcript", role: "log" });
+  const status = el("div", { role: "status", className: "muted" });
+  const question = el("textarea", {
+    name: "question",
+    "aria-label": t("assistant-question"),
+    placeholder: t("assistant-placeholder"),
+    maxlength: 4000,
+    rows: 2,
+    required: "",
   });
-  const result = el("div", { "aria-live": "polite" });
-  const ask = el("button", { className: "primary" }, t("assistant-ask"));
-  const skillSelect = el("select", { name: "skill" });
-  const skillField = el("label", {}, t("assistant-skill"), skillSelect);
-  updateResponseSkills(skillSelect, skills);
+  const send = el("button", { className: "primary", type: "submit" }, t("assistant-ask"));
+  const docs = el(
+    "fieldset",
+    { id: "assistant-docs-options", className: "assistant-docs-options", hidden: "" },
+    field("docsQuery", t("assistant-docs-query"), {
+      maxlength: 160,
+      "aria-describedby": "assistant-docs-help",
+    }),
+    context7Search &&
+      field("libraryId", t("assistant-context7-library"), {
+        maxlength: 160,
+        placeholder: t("assistant-context7-example"),
+      }),
+    el("p", { id: "assistant-docs-help", className: "muted" }, t("assistant-docs-help")),
+  );
+  docs.disabled = true;
+  const docsButton =
+    (docsSearch || context7Search) &&
+    btn(t("assistant-docs-action"), () => {
+      docs.hidden = !docs.hidden;
+      docs.disabled = docs.hidden;
+      docsButton.setAttribute("aria-expanded", String(!docs.hidden));
+      if (!docs.hidden) {
+        docs.querySelector("input").focus();
+      }
+    });
+  if (docsButton) {
+    docsButton.setAttribute("aria-controls", docs.id);
+    docsButton.setAttribute("aria-expanded", "false");
+  }
+
   return [
-    el("p", { className: "muted" }, t("assistant-description")),
-    el("div", { className: "actions" }, el("code", {}, model), check),
-    modelStatus,
+    transcript,
     el(
       "form",
       {
-        className: "panel form",
+        className: "assistant-composer",
         /**
-         * Send a single question and show the response and verified recipe links.
-         * @param event Form submission event from the maintainer.
+         * Append a successful exchange and retain the draft if the request fails.
+         * @param event Form submission containing the message and optional lookup terms.
          */
         onsubmit: async (event) => {
           event.preventDefault();
-          const data = new FormData(event.currentTarget);
-          const question = data.get("question").trim();
-          if (!question) {
+          const content = question.value.trim();
+          if (!content || send.disabled) {
             return;
           }
-          ask.disabled = true;
-          result.textContent = t("assistant-working");
+          const data = new FormData(event.currentTarget);
+          send.disabled = true;
+          question.value = "";
+          const pending = el("div", { className: "assistant-question" }, content);
+          transcript.append(pending);
+          transcript.scrollTop = transcript.scrollHeight;
+          status.textContent = t("assistant-working");
           try {
             const { answer, sources, docsSources } = await api("assistant", {
-              question,
+              question: content,
+              history: recentAssistantHistory(turns),
               docsQuery: data.get("docsQuery")?.trim(),
               libraryId: data.get("libraryId")?.trim(),
-              skill: data.get("skill") ?? undefined,
             });
             const links = [
               ...sources.map(({ slug, id, title }) => ({
@@ -2148,47 +2162,40 @@ async function assistantContent() {
               })),
               ...docsSources.map(({ url, title }) => ({ href: url, title })),
             ];
-            result.replaceChildren(
-              el("div", { className: "assistant-answer" }, answer),
-              links.length
-                ? el(
-                    "ul",
-                    {},
-                    ...links.map(({ href, title }) => el("li", {}, el("a", { href }, title))),
-                  )
-                : null,
+            turns.push({ role: "user", content }, { role: "assistant", content: answer });
+            transcript.append(
+              el(
+                "div",
+                {},
+                el("div", { className: "assistant-answer" }, answer),
+                links.length
+                  ? el(
+                      "ul",
+                      {},
+                      ...links.map(({ href, title }) => el("li", {}, el("a", { href }, title))),
+                    )
+                  : null,
+              ),
             );
+            transcript.scrollTop = transcript.scrollHeight;
+            status.textContent = "";
           } catch (error) {
-            result.textContent = error.message;
+            pending.remove();
+            if (!question.value) {
+              question.value = content;
+            }
+            status.textContent = error.message;
           } finally {
-            ask.disabled = false;
+            send.disabled = false;
           }
         },
       },
-      field(
-        "question",
-        t("assistant-question"),
-        { maxlength: 4000, rows: 4, required: "" },
-        "",
-        true,
-      ),
-      skillField,
-      (docsSearch || context7Search) &&
-        field("docsQuery", t("assistant-docs-query"), {
-          maxlength: 160,
-          "aria-describedby": "assistant-docs-help",
-        }),
-      (docsSearch || context7Search) &&
-        el("p", { id: "assistant-docs-help", className: "muted" }, t("assistant-docs-help")),
-      context7Search &&
-        field("libraryId", t("assistant-context7-library"), {
-          maxlength: 160,
-          placeholder: t("assistant-context7-example"),
-        }),
-      el("p", { className: "muted" }, t("assistant-data-use")),
-      el("div", { className: "actions" }, ask),
+      status,
+      docs,
+      question,
+      el("div", { className: "actions" }, send, docsButton),
+      el("small", { className: "muted" }, t("assistant-data-use")),
     ),
-    result,
   ];
 }
 
@@ -2374,11 +2381,7 @@ async function responseSkillsForm() {
         save.disabled = true;
         status.textContent = "";
         try {
-          const { enabled: available } = await api("settings/mcp/skills", { enabled: selection });
-          const select = assistantView.querySelector('[name="skill"]');
-          if (select) {
-            updateResponseSkills(select, available);
-          }
+          await api("settings/mcp/skills", { enabled: selection });
           status.textContent = t("mcp-skills-saved");
         } catch (error) {
           status.textContent = error.message;

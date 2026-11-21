@@ -58,8 +58,8 @@ when paused. Existing client and recipe permissions continue to apply, and the b
 workflow and built-in OpenAI assistant use their own application routes.
 
 **Settings → MCP → Assistant connection** can enable the public OpenAI Docs lookup.
-It is off by default. After enabling it, enter public search terms in **Assistant**
-alongside a question. Bist makes at most one documentation search per question.
+It is off by default. After enabling it, open **Search documentation** in **Assistant**
+and enter public search terms alongside a question. Bist makes at most one documentation search per question.
 The MCP endpoint receives only those terms. The Assistant displays links returned by
 the documentation service. [OpenAI Docs MCP](https://developers.openai.com/learn/docs-mcp)
 
@@ -98,18 +98,19 @@ may be asked to retry a submission while that work finishes. See the
 
 ## Use agent skills
 
-In **Settings → MCP → Assistant response skills**, maintainers choose which built-in
-skills the Assistant offers on this instance. The Assistant applies a skill only when
-selected for a question. Caveman and Suomen kieli are available by default. Maintainers can also enable the CMS skills for SEO and social
-previews, layout, importing source material, and checking drafts before publication.
-An empty saved selection hides the selector.
+In **Settings → MCP → Assistant response skills**, maintainers enable built-in skills
+for this instance. The model can load an enabled skill when it fits the task.
+Caveman and Suomen kieli are enabled by default. Maintainers can also enable the CMS
+skills for SEO and social previews, layout, importing source material, and checking
+drafts before publication. An empty saved selection disables skill loading.
 
-Open **Assistant** from the top bar on any page. Its current question and answer stay in
-the panel while you navigate. CMS skills use the information and tools available in Bist.
+Open **Assistant** from the top bar on any page. It docks to the right when the window
+is wide enough and appears above the page content in narrower windows. Messages and
+the current draft stay in the panel while you navigate. CMS skills use the information
+and tools available in Bist.
 
-Choose a skill from the Assistant's **Response skill** field to apply its guidance to
-that answer. The library also offers Caveman and Suomen kieli
-as downloads. On a published recipe, **Download SKILL.md** exports its agent instructions
+The library offers Caveman and Suomen kieli as downloads.
+On a published recipe, **Download SKILL.md** exports its agent instructions
 with skill metadata. If the recipe has only documentation, the export uses that text.
 
 Review the file before installing it. For project-scoped Codex use, save it as

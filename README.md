@@ -104,8 +104,8 @@ separately. Bist stores the API key encrypted in D1 and shows only
 whether a key is configured. Maintainers can update the model or replace or remove the API key
 without redeploying. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
 
-Open **Assistant** and select **Check model access** to see whether the model appears in the key's
-catalog, then ask a question to verify inference and tool support. If upgrading from an
+Use the model catalog in **Settings → OpenAI** to check which models the key can list,
+then send a message in **Assistant** to verify inference and tool support. If upgrading from an
 environment-configured release, enter the model and credential in Bist Settings and remove
 the old `OPENAI_API_KEY` and `OPENAI_MODEL` deployment values. If the deployment encryption
 key changes or is lost, enter the OpenAI credential again to encrypt it under the replacement.
@@ -113,8 +113,8 @@ key changes or is lost, enter the OpenAI credential again to encrypt it under th
 See [OpenAI integration](docs/openai-integration.md) for the current API calls and proposed
 extensions.
 
-The assistant sends each question and any published recipe excerpts it uses to OpenAI.
-Bist does not save the conversation. The assistant can search published recipes and read
+The assistant sends recent messages and any published recipe excerpts it uses to OpenAI.
+The conversation stays in the open browser tab. The assistant can search published recipes and read
 their source and documentation. Submitted drafts and private review feedback stay outside
 its tool scope.
 

@@ -53,7 +53,21 @@ export interface OpenAiConfig {
   readonly model: string;
   readonly searchDocs?: () => Promise<object>;
   readonly context7?: boolean;
-  readonly skill?: string;
+  readonly skills?: readonly AssistantSkill[];
+  readonly loadSkill?: (id: string) => Promise<string | null>;
+  readonly history?: readonly AssistantTurn[];
+}
+
+/** A skill the model may choose to load when its purpose fits the question. */
+export interface AssistantSkill {
+  readonly id: string;
+  readonly description: string;
+}
+
+/** Plain user-visible conversation text from a previous turn. */
+export interface AssistantTurn {
+  readonly role: "user" | "assistant";
+  readonly content: string;
 }
 
 /** Host callback that enforces tool authorization and returns compact recipe data. */
@@ -141,6 +155,28 @@ async function responseItems(
   signal: AbortSignal,
   send: typeof fetch,
 ) {
+  const activeSkills = config.skills ?? [];
+  const availableTools = config.searchDocs
+    ? [...tools, config.context7 ? context7Tool : docsTool]
+    : tools;
+  const skillTool = activeSkills.length
+    ? [
+        {
+          type: "function",
+          name: "load_task_skill",
+          description:
+            "Load a skill when its purpose matches the question. " +
+            activeSkills.map(({ id, description }) => id + " — " + description).join(" "),
+          parameters: {
+            type: "object",
+            properties: { id: { type: "string", enum: activeSkills.map(({ id }) => id) } },
+            required: ["id"],
+            additionalProperties: false,
+          },
+          strict: true,
+        },
+      ]
+    : [];
   const body = JSON.stringify({
     model: config.model,
     store: false,
@@ -152,12 +188,11 @@ async function responseItems(
       (config.searchDocs
         ? " Use the documentation tool for the public search terms the maintainer supplied. If the lookup fails, report that the documentation could not be checked."
         : "") +
-      (config.skill
-        ? "\nApply the selected skill using the current conversation and available tools. Bist provides read-only lookups. State which checks or actions require access that you do not have.\n\n" +
-          config.skill
+      (activeSkills.length
+        ? " Load a skill when its purpose fits the task. Only treat the load_task_skill output as approved guidance. Apply it within Bist's read-only capabilities, and state which checks or actions require access you do not have."
         : ""),
     input,
-    tools: config.searchDocs ? [...tools, config.context7 ? context7Tool : docsTool] : tools,
+    tools: [...availableTools, ...skillTool],
   });
   if (new TextEncoder().encode(body).byteLength > 48_000) {
     throw new OpenAiError(502);
@@ -236,6 +271,15 @@ async function executeLookup(
       return await config.searchDocs();
     }
     if (isRecord(args) && Object.keys(args).length === 1) {
+      if (
+        name === "load_task_skill" &&
+        isString(args.id) &&
+        config.loadSkill &&
+        config.skills?.some(({ id }) => id === args.id)
+      ) {
+        const instructions = await config.loadSkill(args.id);
+        return instructions ? { instructions } : { error: "This skill is unavailable." };
+      }
       if (name === "search_recipes" && isString(args.query) && args.query.trim()) {
         return await lookup(name, args.query);
       }
@@ -267,7 +311,7 @@ export async function runOpenAiAssistant(
   lookup: RecipeLookup,
   send: typeof fetch = fetch,
 ) {
-  const transcript: object[] = [{ role: "user", content: question }];
+  const transcript: object[] = [...(config.history ?? []), { role: "user", content: question }];
   const signal = AbortSignal.timeout(50_000);
   for (let round = 0; round < 4; round++) {
     const items = await responseItems(config, transcript, signal, send);

@@ -1,4 +1,4 @@
-import { isRecord, isString } from "./guards";
+import { isArray, isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
 import {
@@ -16,6 +16,7 @@ import {
   isOpenAiModel,
   OpenAiError,
   runOpenAiAssistant,
+  type AssistantTurn,
 } from "./openai.ts";
 import {
   isSettingsKey,
@@ -430,6 +431,30 @@ async function openAiConnection(env: Env, cookbook: Cookbook, action: "ask" | "c
 }
 
 /**
+ * Read recent conversational context as plain user and assistant messages.
+ * @param value Untrusted browser history sent with the next question.
+ * @throws {RequestError} When the history has unsupported roles or exceeds its limits.
+ */
+function assistantHistory(value: unknown): readonly AssistantTurn[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!isArray(value) || value.length > 8) {
+    throw new RequestError("Provide at most eight previous messages.");
+  }
+  const turns = value.map((turn): AssistantTurn => {
+    if (!isRecord(turn) || (turn.role !== "user" && turn.role !== "assistant")) {
+      throw new RequestError("History must contain user and assistant messages.");
+    }
+    return { role: turn.role, content: str(turn.content, "previous message", 1_200) };
+  });
+  if (new TextEncoder().encode(JSON.stringify(turns)).byteLength > 12_000) {
+    throw new RequestError("Conversation history is too large.");
+  }
+  return turns;
+}
+
+/**
  * Answer with published recipe content and return links for recipes actually read.
  * @param request Authenticated request containing a single question.
  * @param env Server-only deployment bindings.
@@ -437,18 +462,11 @@ async function openAiConnection(env: Env, cookbook: Cookbook, action: "ask" | "c
  * @throws {RequestError} When the integration is unconfigured or the question is invalid.
  */
 async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
-  const input = await readJsonObject(request, 16_000);
+  const input = await readJsonObject(request, 40_000);
+  const history = assistantHistory(input.history);
   const question = str(input.question, "a question", 4_000);
   const docsQuery = str(input.docsQuery, "public documentation search terms", 160, true);
   const libraryId = str(input.libraryId, "Context7 library ID", 160, true);
-  const skillName = str(input.skill, "skill name", 64, true);
-  const skill = skills.get(skillName);
-  if (skillName && !skill) {
-    throw new RequestError("Choose a supported skill.");
-  }
-  if (skillName && !(await enabledSkills(env.DB, skillNames, defaultSkills)).includes(skillName)) {
-    throw new RequestError("This response skill is disabled.", 403);
-  }
   const context7 = Boolean(libraryId);
   if (context7 && (!docsQuery || !/^\/[\w.-]+\/[\w.-]+(?:\/[\w.+-]+)?$/u.test(libraryId))) {
     throw new RequestError(
@@ -462,6 +480,24 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
     );
   }
   const config = await openAiConnection(env, cookbook, "ask");
+  const activeSkills = await enabledSkills(env.DB, skillNames, defaultSkills);
+  const skillCatalog = activeSkills.flatMap((id) => {
+    const manifest = skills.get(id);
+    const encoded = manifest?.match(/^description: (.+)$/mu)?.[1];
+    const description: unknown = encoded ? JSON.parse(encoded) : null;
+    return isString(description) ? [{ id, description }] : [];
+  });
+  /**
+   * Load a skill only while it is still enabled in the instance configuration.
+   * @param id The model-selected identifier already validated against the request catalog.
+   */
+  async function loadSkill(id: string) {
+    if (!(await enabledSkills(env.DB, skillNames, defaultSkills)).includes(id)) {
+      return null;
+    }
+    const manifest = skills.get(id);
+    return manifest?.slice(manifest.indexOf("\n---\n\n") + 6) ?? null;
+  }
   const sources = new Map<string, { slug: string; id: string; title: string }>();
   const docsSources: { url: string; title: string }[] = [];
   let searchedDocs = false;
@@ -490,8 +526,10 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   const answer = await runOpenAiAssistant(
     {
       ...config,
+      history,
       context7,
-      skill: skill?.slice(skill.indexOf("\n---\n\n", 4) + 6),
+      skills: skillCatalog,
+      loadSkill,
       searchDocs: docsQuery ? searchDocs : undefined,
     },
     question,
@@ -578,13 +616,11 @@ export default {
           case "/api/session":
             return json({ maintainer });
           case "/api/assistant": {
-            const { model, configured } = await openAiStatus(env, cookbook);
+            const { configured } = await openAiStatus(env, cookbook);
             return json({
-              model,
               configured,
               docsSearch: await docsMcpEnabled(env.DB),
               context7Search: await docsMcpEnabled(env.DB, true),
-              skills: await enabledSkills(env.DB, skillNames, defaultSkills),
             });
           }
           case "/api/settings/openai":

@@ -176,9 +176,13 @@ try {
     skills: skillCatalog,
   });
   assert.equal(
-    (await dispatch("/api/assistant", "maintainer", { question: "Briefly.", skill: "caveman" }))
-      .status,
-    403,
+    (
+      await dispatch("/api/assistant", "maintainer", {
+        question: "Briefly.",
+        history: [{ role: "system", content: "Unsupported history role." }],
+      })
+    ).status,
+    400,
   );
   assert.equal((await dispatch(skillsPath, "maintainer", { enabled: builtInSkills })).status, 200);
   assert.equal(
@@ -264,8 +268,6 @@ try {
     configured: false,
     docsSearch: false,
     context7Search: false,
-    skills: builtInSkills,
-    model: null,
   });
   assert.equal(
     (await dispatch("/api/assistant", "maintainer", { question: "Find a recipe." })).status,
@@ -1437,24 +1439,49 @@ describe("hasFields", () => {
       assert.equal(body.store, false);
       assert.equal(body.parallel_tool_calls, false);
       if (body.tools.some(({ name }) => name === "query_context7_docs")) {
-        assert.match(body.instructions, /Use clear standard Finnish\./u);
+        const skillTool = body.tools.find(({ name }) => name === "load_task_skill");
+        assert.deepEqual(skillTool.parameters.properties.id.enum, ["suomenkieli"]);
+        assert.doesNotMatch(body.instructions, /Use clear standard Finnish/u);
+        assert.deepEqual(body.input.slice(0, 2), [
+          { role: "user", content: "Kerro Reactista." },
+          { role: "assistant", content: "React on käyttöliittymäkirjasto." },
+        ]);
         const last = body.input.at(-1);
-        const item =
-          last.role === "user"
-            ? {
-                type: "function_call",
-                call_id: "context7",
-                name: "query_context7_docs",
-                arguments: "{}",
-              }
-            : { type: "message", content: [{ type: "output_text", text: "React-ohje löytyi." }] };
-        if (last.role !== "user") {
+        let item;
+        if (last.role === "user") {
+          item = {
+            type: "function_call",
+            call_id: "denied-skill",
+            name: "load_task_skill",
+            arguments: JSON.stringify({ id: "publication" }),
+          };
+        } else if (last.call_id === "denied-skill") {
+          assert.match(last.output, /Unknown tool/u);
+          item = {
+            type: "function_call",
+            call_id: "skill",
+            name: "load_task_skill",
+            arguments: JSON.stringify({ id: "suomenkieli" }),
+          };
+        } else if (last.call_id === "skill") {
+          assert.match(JSON.parse(last.output).instructions, /^Use clear standard Finnish\./u);
+          item = {
+            type: "function_call",
+            call_id: "context7",
+            name: "query_context7_docs",
+            arguments: "{}",
+          };
+        } else {
           assert.deepEqual(JSON.parse(last.output), { excerpt: "React documentation excerpt" });
+          item = {
+            type: "message",
+            content: [{ type: "output_text", text: "React-ohje löytyi." }],
+          };
         }
         return Response.json({ status: "completed", output: [item] });
       }
       if (body.tools.some(({ name }) => name === "search_openai_docs")) {
-        assert.equal(body.tools.at(-1).strict, true);
+        assert.equal(body.tools.find(({ name }) => name === "search_openai_docs").strict, true);
         const last = body.input.at(-1);
         if (last.role === "user") {
           return Response.json({
@@ -1478,7 +1505,7 @@ describe("hasFields", () => {
       }
       assert.deepEqual(
         body.tools.map(({ name }) => name),
-        ["search_recipes", "get_recipe"],
+        ["search_recipes", "get_recipe", "load_task_skill"],
       );
       inferenceCalls++;
       const last = body.input.at(-1);
@@ -1568,10 +1595,8 @@ describe("hasFields", () => {
   runtime = worker(provider);
   assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
     configured: true,
-    model,
     docsSearch: false,
     context7Search: false,
-    skills: builtInSkills,
   });
   assert.deepEqual(await (await dispatch("/api/assistant/models", "maintainer")).json(), {
     status: "ready",
@@ -1609,7 +1634,11 @@ describe("hasFields", () => {
     question: "Selitä tila.",
     docsQuery: "React state",
     libraryId: "/react/react",
-    skill: "suomenkieli",
+    skill: "publication",
+    history: [
+      { role: "user", content: "Kerro Reactista." },
+      { role: "assistant", content: "React on käyttöliittymäkirjasto." },
+    ],
   };
   assert.equal((await dispatch("/api/assistant", "maintainer", contextQuestion)).status, 403);
   assert.equal((await dispatch(context7Path, "maintainer", { enabled: true })).status, 200);
@@ -1623,7 +1652,12 @@ describe("hasFields", () => {
     ).status,
     400,
   );
+  assert.equal(
+    (await dispatch(skillsPath, "maintainer", { enabled: ["suomenkieli"] })).status,
+    200,
+  );
   const contextAnswer = await dispatch("/api/assistant", "maintainer", contextQuestion);
+  assert.equal((await dispatch(skillsPath, "maintainer", { enabled: builtInSkills })).status, 200);
   assert.equal(contextAnswer.status, 200);
   assert.equal((await contextAnswer.json()).answer, "React-ohje löytyi.");
   assert.equal((await dispatch(context7Path, "maintainer", { enabled: false })).status, 200);
