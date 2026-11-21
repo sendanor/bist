@@ -79,6 +79,16 @@ await build({
           });
           return { contents: html, loader: "text" };
         });
+        // Sites exposes Node globals. The recipe compiler uses only our in-memory host.
+        builder.onLoad({ filter: /\/typescript\/lib\/typescript\.js$/ }, async ({ path }) => {
+          const source = await readFile(path, "utf8");
+          const nodeHost =
+            'return typeof process !== "undefined" && !!process.nextTick && !process.browser && typeof require !== "undefined";';
+          if (source.split(nodeHost).length !== 2) {
+            throw new Error("Review TypeScript's Node host detection after upgrading TypeScript.");
+          }
+          return { contents: source.replace(nodeHost, "return false;"), loader: "js" };
+        });
         // Prettier's pinned TypeScript parser already generates ESLint-compatible
         // tokens. Enable them so token-based ESLint rules can use the same AST.
         builder.onLoad({ filter: /\/prettier\/plugins\/typescript\.mjs$/ }, async ({ path }) => {

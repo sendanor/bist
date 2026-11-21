@@ -14,6 +14,7 @@ const worker = () =>
     scriptPath: resolve("dist/server/index.js"),
     modules: true,
     compatibilityDate: "2026-07-30",
+    compatibilityFlags: ["nodejs_compat"],
     d1Databases: { DB: "cookbook" },
     d1Persist: folder,
     bindings: { MAINTAINER_EMAILS: "maintainer@example.test" },
