@@ -8,7 +8,13 @@ import { checkTranslations } from "./translations.mjs";
 const root = process.cwd();
 const sourceRoot = resolve("src");
 const browserFiles = new Set(["browser.js", "browser-api.js", "localization.js"]);
-const baseFiles = new Set(["guards.ts", "line-diff.ts", "contracts.ts", "read-json-object.ts"]);
+const baseFiles = new Set([
+  "guards.ts",
+  "line-diff.ts",
+  "contracts.ts",
+  "read-json-object.ts",
+  "routes.ts",
+]);
 const virtual = new Map([
   ["cookbook:browser", "src/index.ts"],
   ["cookbook:typescript-libraries", "src/quality/recipe-types.ts"],

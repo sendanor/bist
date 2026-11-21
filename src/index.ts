@@ -1,5 +1,6 @@
 import { isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
+import { parsePagePath } from "./routes.ts";
 import { Cookbook, RequestError, type Database, type Input } from "./store";
 import html from "./page.html";
 import css from "./styles.css";
@@ -229,7 +230,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (request.method === "GET") {
-        if (url.pathname === "/") {
+        if (parsePagePath(url.pathname)) {
           return asset(html, "text/html");
         }
         if (url.pathname === "/styles.css") {

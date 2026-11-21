@@ -156,6 +156,34 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   const shell = await (await dispatch("/", null)).text();
   assert.match(shell, /recipes and guides/);
   assert.doesNotMatch(shell, /\{\{t:/);
+  assert.match(shell, /href="\/review"/);
+  assert.doesNotMatch(shell, /href="#(?:library|contribute|mine|review|settings)"/);
+  const routeRevision = "00000000-0000-4000-8000-000000000001";
+  for (const path of [
+    "/library",
+    "/contribute",
+    "/mine",
+    "/review",
+    "/settings",
+    "/recipe/review/route-example/" + routeRevision,
+    "/edit/route-example/" + routeRevision,
+    "/improve/route-example/" + routeRevision,
+  ]) {
+    const response = await dispatch(path, null);
+    assert.equal(response.status, 200, path);
+    assert.equal(await response.text(), shell, path);
+  }
+  for (const path of [
+    "/missing-page",
+    "/recipe/review/route-example",
+    "/recipe/missing/route-example/" + routeRevision,
+    "/recipe/review/route-example/invalid-revision",
+    "/recipe/review/%2F/" + routeRevision,
+    "/edit/%ZZ/" + routeRevision,
+    "/styles/extra.css",
+  ]) {
+    assert.equal((await dispatch(path, null)).status, 404, path);
+  }
 
   /**
    * Submit a recipe snapshot as the test author.

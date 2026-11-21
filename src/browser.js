@@ -2,6 +2,7 @@ import { t } from "./localization.js";
 import { api } from "./browser-api.js";
 import cssLanguage from "highlight.js/lib/languages/css";
 import { diffLines, sourceLines } from "./line-diff.ts";
+import { parsePagePath } from "./routes.ts";
 import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import highlighter from "highlight.js/lib/core";
@@ -134,7 +135,7 @@ function title(text, detail) {
  */
 function routeRecipe(recipe, section) {
   return (
-    "#recipe/" +
+    "/recipe/" +
     section +
     "/" +
     encodeURIComponent(recipe.slug) +
@@ -237,7 +238,7 @@ async function library() {
         : empty(
             t("no-published-recipes-yet"),
             t("submit-a-recipe-for-review-to-start-your"),
-            buttonLink(t("contribute-a-recipe"), "#contribute"),
+            buttonLink(t("contribute-a-recipe"), "/contribute"),
           ),
   ];
 }
@@ -379,7 +380,7 @@ function contribute(recipe, replace = false) {
               ...(result.warnings ?? []),
             ].join("\n"),
           );
-          location.hash = routeRecipe(result, "mine");
+          navigate(routeRecipe(result, "mine"));
         } catch (error) {
           banner(error.message, true);
         } finally {
@@ -1017,7 +1018,7 @@ function revisionChoices(recipe) {
     choices.push({
       label: recipe.canReplace ? t("edit-draft") : t("propose-an-improvement"),
       href:
-        (recipe.canReplace ? "#edit/" : "#improve/") +
+        (recipe.canReplace ? "/edit/" : "/improve/") +
         encodeURIComponent(recipe.slug) +
         "/" +
         encodeURIComponent(recipe.id),
@@ -1150,7 +1151,7 @@ function revisionControls(recipe, section) {
     menu.hidden = !open;
     trigger.setAttribute("aria-expanded", String(open));
   }
-  const page = location.hash;
+  const page = location.pathname;
   /**
    * Send a revision action and report its result to the reader.
    * @param action The review operation to run.
@@ -1166,12 +1167,12 @@ function revisionControls(recipe, section) {
       reason,
     });
     dialog.close();
-    if (location.hash !== page) {
+    if (location.pathname !== page) {
       return;
     }
     banner(action === "publish" ? t("recipe-published") : t("revision-updated"), false, true);
     if (["remove_draft", "approve_removal"].includes(action)) {
-      location.hash = "#" + section;
+      navigate("/" + section);
     } else {
       await render();
       toolbar.querySelector("button")?.focus({ preventScroll: true });
@@ -1411,35 +1412,24 @@ async function settingsPage() {
   });
   return [title(t("code-policy"), t("set-the-rules-for-new-recipe-revisions-submitted")), form];
 }
-/** Render the current hash route and discard stale asynchronous results. */
+/** Render the current page path and discard stale asynchronous results. */
 async function render() {
   const current = ++renderId;
   toolbar.replaceChildren();
-  const [page, one, two, three] = location.hash
-    .slice(1)
-    .split("/")
-    .map((part) => {
-      try {
-        return decodeURIComponent(part);
-      } catch {
-        return "";
-      }
-    });
-  const section =
-    page === "recipe" ? one : ["improve", "edit"].includes(page) ? "contribute" : page || "library";
+  const { page, section, slug, revision } = parsePagePath(location.pathname);
   const reading = page === "recipe";
   topBar.classList.toggle("recipe-top", reading);
   outlet.classList.toggle("recipe-view", reading);
   revisionBack.hidden = !reading;
   if (reading) {
-    revisionBack.href = "#" + (Object.hasOwn(labels, section) ? section : "library");
+    revisionBack.href = "/" + section;
     const backLabel = t("back-to") + (labels[section] ?? t("library")).toLowerCase();
     revisionBack.setAttribute("aria-label", backLabel);
     revisionBack.title = backLabel;
   }
   locationLabel.textContent = labels[section] ?? labels.library;
   for (const link of document.querySelectorAll(".rail nav a")) {
-    if (link.hash === "#" + section) {
+    if (link.pathname === "/" + section) {
       link.setAttribute("aria-current", "page");
     } else {
       link.removeAttribute("aria-current");
@@ -1450,12 +1440,12 @@ async function render() {
     let actions;
     let toolbarTitle;
     if (page === "recipe") {
-      ({ view, actions, toolbarTitle } = await recipePage(one, two, three));
+      ({ view, actions, toolbarTitle } = await recipePage(section, slug, revision));
     } else if (page === "improve" || page === "edit") {
       const recipe =
-        page === "improve" && recentRecipe?.id === two && recentRecipe.slug === one
+        page === "improve" && recentRecipe?.id === revision && recentRecipe.slug === slug
           ? recentRecipe
-          : await api("recipe?" + new URLSearchParams({ slug: one, revision: two }));
+          : await api("recipe?" + new URLSearchParams({ slug, revision }));
       if (page === "edit" && !recipe.canReplace) {
         throw new Error(t("draft-no-longer-editable"));
       }
@@ -1506,19 +1496,81 @@ document.querySelector(".skip").addEventListener("click", (event) => {
   event.preventDefault();
   document.querySelector("#content").focus();
 });
-window.addEventListener("hashchange", async () => {
-  const target = location.hash;
+
+/** Replace a legacy bookmark on the root page with its canonical path and keep its query. */
+function upgradeLegacyRoute() {
+  if (location.pathname !== "/" || !location.hash) {
+    return false;
+  }
+  const path = "/" + location.hash.slice(1);
+  if (!parsePagePath(path)) {
+    return false;
+  }
+  history.replaceState(history.state, "", path + location.search);
+  return true;
+}
+
+/** Render a navigation and reset content focus once its latest view has loaded. */
+async function renderNavigation() {
+  const target = location.href;
   await render();
-  if (location.hash === target) {
+  if (location.href === target) {
     document.querySelector("#content").focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }
-});
+}
+
+/**
+ * Open an application path and retain the previous page in the browser history.
+ * @param path The known same-origin application path, optionally with a query string.
+ */
+function navigate(path) {
+  if (location.pathname + location.search !== path || location.hash) {
+    history.pushState(null, "", path);
+    void renderNavigation();
+  }
+}
+
+upgradeLegacyRoute();
 try {
   ({ maintainer } = await api("session"));
   for (const route of ["review", "settings"]) {
-    document.querySelector(`.rail nav a[href="#${route}"]`).hidden = !maintainer;
+    document.querySelector(`.rail nav a[href="/${route}"]`).hidden = !maintainer;
   }
+  document.addEventListener("click", (event) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      !(event.target instanceof Element)
+    ) {
+      return;
+    }
+    const link = event.target.closest("a[href]");
+    if (
+      link instanceof HTMLAnchorElement &&
+      link.origin === location.origin &&
+      (!link.target || link.target === "_self") &&
+      !link.hasAttribute("download") &&
+      !link.hash &&
+      parsePagePath(link.pathname)
+    ) {
+      event.preventDefault();
+      navigate(link.pathname + link.search);
+    }
+  });
+  window.addEventListener("popstate", () => {
+    upgradeLegacyRoute();
+    void renderNavigation();
+  });
+  window.addEventListener("hashchange", () => {
+    if (upgradeLegacyRoute()) {
+      void renderNavigation();
+    }
+  });
   await render();
 } catch (error) {
   outlet.replaceChildren(
@@ -1527,7 +1579,13 @@ try {
       error.message,
       el(
         "a",
-        { className: "button primary", href: "/signin-with-chatgpt?returnTo=%2F", target: "_top" },
+        {
+          className: "button primary",
+          href:
+            "/signin-with-chatgpt?" +
+            new URLSearchParams({ returnTo: location.pathname + location.search }),
+          target: "_top",
+        },
         t("sign-in-with-chatgpt"),
       ),
     ),
