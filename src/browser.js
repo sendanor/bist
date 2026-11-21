@@ -713,11 +713,10 @@ async function recipePage(section, slug, revision) {
     chip(stateLabels[recipe.state] ?? recipe.state, "state-" + recipe.state),
     ...recipe.tags.map((tag) => chip(tag)),
     el(
-      "details",
+      "dl",
       { className: "revision-meta" },
-      el("summary", {}, t("revision-details")),
-      el("p", {}, recipe.slug),
-      el("p", {}, recipe.id),
+      el("div", {}, el("dt", {}, t("recipe-slug")), el("dd", {}, el("code", {}, recipe.slug))),
+      el("div", {}, el("dt", {}, t("revision-id")), el("dd", {}, el("code", {}, recipe.id))),
     ),
     recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
     recipe.removal_reason &&
