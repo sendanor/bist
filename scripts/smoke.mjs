@@ -1,3 +1,4 @@
+import { repositoryRecipe } from "./repository-recipes.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -191,6 +192,30 @@ export function Panel(label: string) {
   assert.equal(savedParts.files.styles, ".recipe-2 {\n  color: red;\n}\n");
   assert.equal(savedParts.files.source, "export const x: number = 1;\n");
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
+
+  for (const slug of ["bounded-line-diff", "bounded-json-object-reader"]) {
+    const files = await repositoryRecipe(slug);
+    const submission = { ...payload, slug, title: slug, files };
+    const revision =
+      slug === "bounded-line-diff"
+        ? await tool("submit_recipe", submission)
+        : await (await dispatch("/api/submit", "author", submission)).json();
+    assert.equal(revision.state, "pending", JSON.stringify(revision));
+    const stored = await tool("get_recipe", {
+      slug,
+      revision: revision.id,
+      parts: ["source", "tests"],
+    });
+    const directory = await mkdtemp(join(tmpdir(), "bist-repository-recipe-"));
+    try {
+      await writeFile(join(directory, "package.json"), '{"type":"module"}');
+      await writeFile(join(directory, "source.ts"), stored.files.source);
+      await writeFile(join(directory, "recipe.test.ts"), stored.files.tests);
+      execFileSync(process.execPath, [join(directory, "recipe.test.ts")], { cwd: directory });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
 
   const allRules = Object.fromEntries(
     [
