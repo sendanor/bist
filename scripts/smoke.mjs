@@ -139,6 +139,7 @@ try {
   );
   await db.prepare(await readFile("drizzle/0010_recipe_file_names.sql", "utf8")).run();
   await db.prepare(await readFile("drizzle/0011_mcp_settings.sql", "utf8")).run();
+  await db.prepare(await readFile("drizzle/0012_assistant_docs_mcp.sql", "utf8")).run();
   const legacyReview = await db
     .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
     .bind(legacyReviewRevision)
@@ -151,6 +152,9 @@ try {
 
   assert.equal((await dispatch("/api/search", null)).status, 401);
   const mcpPath = "/api/settings/mcp";
+  const docsMcpPath = mcpPath + "/openai-docs";
+  assert.deepEqual(await (await dispatch(docsMcpPath, "maintainer")).json(), { enabled: false });
+  assert.equal((await dispatch(docsMcpPath, "author", { enabled: true })).status, 403);
   const mcpSettings = await (await dispatch(mcpPath, "maintainer")).json();
   const mcpSelection = { enabled: true, enabledTools: ["search_recipes"] };
   const listMcp = { jsonrpc: "2.0", id: 1, method: "tools/list" };
@@ -214,6 +218,7 @@ try {
   assert.equal((await dispatch("/api/assistant/models", "reader")).status, 403);
   assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
     configured: false,
+    docsSearch: false,
     model: null,
   });
   assert.equal(
@@ -1309,6 +1314,7 @@ describe("hasFields", () => {
   const deploymentKey = "12".repeat(32);
   const rotatedDeploymentKey = "34".repeat(32);
   let inferenceCalls = 0;
+  const docsMethods = [];
   const provider = {
     bindings: { SETTINGS_ENCRYPTION_KEY: deploymentKey },
     /**
@@ -1316,8 +1322,49 @@ describe("hasFields", () => {
      * @param request The local Worker outgoing request.
      */
     outboundService: async (request) => {
-      assert.equal(request.headers.get("authorization"), "Bearer " + key);
       const url = new URL(request.url);
+      if (url.href === "https://developers.openai.com/mcp") {
+        assert.equal(request.headers.get("authorization"), null);
+        const { method, id, params } = await request.json();
+        docsMethods.push(method);
+        if (method === "initialize") {
+          return Response.json({
+            jsonrpc: "2.0",
+            id,
+            result: { protocolVersion: "2025-11-25" },
+          });
+        }
+        if (method === "notifications/initialized") {
+          return new Response(null, { status: 202 });
+        }
+        assert.equal(method, "tools/call");
+        assert.deepEqual(params, {
+          name: "search_openai_docs",
+          arguments: { query: "Responses streaming", limit: 3 },
+        });
+        return Response.json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  hits: [
+                    {
+                      url: "https://developers.openai.com/api/docs/guides/streaming-responses",
+                      hierarchy: { lvl1: "Streaming" },
+                      content: "Public excerpt",
+                    },
+                    { url: "https://outside.example/unknown", content: "Rejected result" },
+                  ],
+                }),
+              },
+            ],
+          },
+        });
+      }
+      assert.equal(request.headers.get("authorization"), "Bearer " + key);
       assert.equal(url.origin, "https://api.openai.com");
       if (url.pathname === "/v1/models") {
         return Response.json({ data: [{ id: model }, { id: model }, { id: "invalid model" }] });
@@ -1327,6 +1374,29 @@ describe("hasFields", () => {
       assert.equal(body.model, model);
       assert.equal(body.store, false);
       assert.equal(body.parallel_tool_calls, false);
+      if (body.tools.some(({ name }) => name === "search_openai_docs")) {
+        assert.equal(body.tools.at(-1).strict, true);
+        const last = body.input.at(-1);
+        if (last.role === "user") {
+          return Response.json({
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                call_id: "docs",
+                name: "search_openai_docs",
+                arguments: "{}",
+              },
+            ],
+          });
+        }
+        assert.match(last.output, /Public excerpt/u);
+        assert.doesNotMatch(last.output, /outside\.example|Rejected result/u);
+        return Response.json({
+          status: "completed",
+          output: [{ type: "message", content: [{ type: "output_text", text: "See Streaming." }] }],
+        });
+      }
       assert.deepEqual(
         body.tools.map(({ name }) => name),
         ["search_recipes", "get_recipe"],
@@ -1420,6 +1490,7 @@ describe("hasFields", () => {
   assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
     configured: true,
     model,
+    docsSearch: false,
   });
   assert.deepEqual(await (await dispatch("/api/assistant/models", "maintainer")).json(), {
     status: "ready",
@@ -1434,7 +1505,25 @@ describe("hasFields", () => {
   assert.deepEqual(await answer.json(), {
     answer: "Use the paging recipe.",
     sources: [{ slug: "paging-fixture-26", id: sampleIds.at(-1), title: "Cursor sample" }],
+    docsSources: [],
   });
+  const docsQuestion = { question: "Explain streaming.", docsQuery: "Responses streaming" };
+  assert.equal((await dispatch("/api/assistant", "maintainer", docsQuestion)).status, 403);
+  assert.equal((await dispatch(docsMcpPath, "maintainer", { enabled: true })).status, 200);
+  const docsAnswer = await dispatch("/api/assistant", "maintainer", docsQuestion);
+  assert.equal(docsAnswer.status, 200);
+  assert.deepEqual(await docsAnswer.json(), {
+    answer: "See Streaming.",
+    sources: [],
+    docsSources: [
+      {
+        url: "https://developers.openai.com/api/docs/guides/streaming-responses",
+        title: "Streaming",
+      },
+    ],
+  });
+  assert.deepEqual(docsMethods, ["initialize", "notifications/initialized", "tools/call"]);
+  assert.equal((await dispatch(docsMcpPath, "maintainer", { enabled: false })).status, 200);
   const limited = await dispatch("/api/assistant", "maintainer", { question: "Try again." });
   assert.equal(limited.status, 429);
   assert.doesNotMatch(await limited.text(), /Private provider failure/);

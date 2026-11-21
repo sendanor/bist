@@ -57,6 +57,12 @@ if a client has cached an older tool list. The MCP endpoint still responds to di
 when paused. Existing client and recipe permissions continue to apply, and the browser
 workflow and built-in OpenAI assistant use their own application routes.
 
+**Settings → MCP → Assistant connection** can enable the public OpenAI Docs lookup.
+It is off by default. After enabling it, enter public search terms in **Assistant**
+alongside a question. Bist makes at most one documentation search per question.
+The MCP endpoint receives only those terms. The Assistant displays links returned by
+the documentation service. [OpenAI Docs MCP](https://developers.openai.com/learn/docs-mcp)
+
 - `search_recipes` finds published recipe summaries by keyword and tag. Listing tools accept
   `tags` as an array of exact tags that must all match, alongside the optional `query`.
 - `get_recipe` takes a slug and can retrieve selected parts. It defaults to the current

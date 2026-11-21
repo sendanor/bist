@@ -2035,7 +2035,7 @@ async function codePolicyPage() {
 
 /** Build the maintainer's published-recipe assistant and its model access check. */
 async function assistantPage() {
-  const { configured, model } = await api("assistant");
+  const { configured, model, docsSearch } = await api("assistant");
   const heading = title(t("assistant"), t("assistant-description"));
   if (!configured) {
     return [
@@ -2086,23 +2086,32 @@ async function assistantPage() {
          */
         onsubmit: async (event) => {
           event.preventDefault();
-          const question = new FormData(event.currentTarget).get("question").trim();
+          const data = new FormData(event.currentTarget);
+          const question = data.get("question").trim();
           if (!question) {
             return;
           }
           ask.disabled = true;
           result.textContent = t("assistant-working");
           try {
-            const { answer, sources } = await api("assistant", { question });
+            const { answer, sources, docsSources } = await api("assistant", {
+              question,
+              docsQuery: data.get("docsQuery")?.trim(),
+            });
+            const links = [
+              ...sources.map(({ slug, id, title }) => ({
+                href: routeRecipe({ slug, id }, "library"),
+                title,
+              })),
+              ...docsSources.map(({ url, title }) => ({ href: url, title })),
+            ];
             result.replaceChildren(
               el("div", { className: "assistant-answer" }, answer),
-              sources.length
+              links.length
                 ? el(
                     "ul",
                     {},
-                    ...sources.map((source) =>
-                      el("li", {}, el("a", { href: routeRecipe(source, "library") }, source.title)),
-                    ),
+                    ...links.map(({ href, title }) => el("li", {}, el("a", { href }, title))),
                   )
                 : null,
             );
@@ -2120,6 +2129,13 @@ async function assistantPage() {
         "",
         true,
       ),
+      docsSearch &&
+        field("docsQuery", t("assistant-docs-query"), {
+          maxlength: 160,
+          "aria-describedby": "assistant-docs-help",
+        }),
+      docsSearch &&
+        el("p", { id: "assistant-docs-help", className: "muted" }, t("assistant-docs-help")),
       el("p", { className: "muted" }, t("assistant-data-use")),
       el("div", { className: "actions" }, ask),
     ),
@@ -2203,6 +2219,42 @@ async function mcpSettingsForm() {
   );
 }
 
+/** Build the opt-in setting for the assistant's public documentation tool. */
+async function assistantMcpForm() {
+  const { enabled } = await api("settings/mcp/openai-docs");
+  const control = el("input", { type: "checkbox", name: "enabled" });
+  control.checked = enabled;
+  const status = el("p", { role: "status", className: "muted" });
+  const save = el("button", { className: "primary", type: "submit" }, t("mcp-save-docs"));
+  return el(
+    "form",
+    {
+      className: "panel form",
+      /**
+       * Save the opt-in setting independently of the tools exposed by the Bist server.
+       * @param event Submission from the assistant connection form.
+       */
+      onsubmit: async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        status.textContent = "";
+        try {
+          await api("settings/mcp/openai-docs", { enabled: control.checked });
+          status.textContent = t("mcp-docs-saved");
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          save.disabled = false;
+        }
+      },
+    },
+    el("h2", {}, t("mcp-assistant-connection")),
+    el("p", { className: "muted" }, t("mcp-assistant-docs-help")),
+    el("label", { className: "setting-toggle" }, t("mcp-assistant-docs"), control),
+    el("div", { className: "actions" }, save, status),
+  );
+}
+
 /**
  * Navigate among settings sections while retaining the active section.
  * @param page The current settings route.
@@ -2235,7 +2287,12 @@ async function settingsPage(page) {
     return [heading, nav, form];
   }
   if (page === "settings/mcp") {
-    return [title(t("mcp-settings"), t("mcp-settings-help")), nav, await mcpSettingsForm()];
+    return [
+      title(t("mcp-settings"), t("mcp-settings-help")),
+      nav,
+      await mcpSettingsForm(),
+      await assistantMcpForm(),
+    ];
   }
   return [title(t("settings")), nav];
 }

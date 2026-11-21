@@ -60,3 +60,34 @@ export async function saveMcpSettings(
     .run();
   return { enabled, enabledTools: selected };
 }
+
+/**
+ * Read the assistant's independent, opt-in documentation search setting.
+ * @param db The instance database binding.
+ */
+export async function docsMcpEnabled(db: Database) {
+  const row = await db
+    .prepare("SELECT enabled FROM assistant_docs_mcp WHERE id = 1")
+    .first<{ enabled: number }>();
+  return row?.enabled === 1;
+}
+
+/**
+ * Change the documentation search setting after the route authorizes the maintainer.
+ * @param db The instance database binding.
+ * @param input The untrusted request containing the enabled switch.
+ * @throws {RequestError} When the switch is missing or invalid.
+ */
+export async function saveDocsMcp(db: Database, input: Input) {
+  if (typeof input.enabled !== "boolean") {
+    throw new RequestError("Choose whether to enable the OpenAI Docs MCP tool.");
+  }
+  await db
+    .prepare(
+      `INSERT INTO assistant_docs_mcp (id, enabled) VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled`,
+    )
+    .bind(Number(input.enabled))
+    .run();
+  return { enabled: input.enabled };
+}

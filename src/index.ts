@@ -1,7 +1,8 @@
 import { isRecord, isString } from "./guards";
 import { JsonBodyError, readJsonObject } from "./read-json-object";
 import { parsePagePath } from "./routes.ts";
-import { readMcpSettings, saveMcpSettings } from "./mcp-settings.ts";
+import { docsMcpEnabled, readMcpSettings, saveDocsMcp, saveMcpSettings } from "./mcp-settings.ts";
+import { searchOpenAiDocs } from "./openai-docs-mcp.ts";
 import { Cookbook, RequestError, str, type Database, type Input } from "./store";
 import {
   fetchOpenAiModelCatalog,
@@ -32,6 +33,7 @@ const openAiPaths = new Set([
 ]);
 const mcpSettingsPath = "/api/settings/mcp";
 const mcpCheckPath = mcpSettingsPath + "/check";
+const docsMcpPath = mcpSettingsPath + "/openai-docs";
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -379,31 +381,57 @@ async function openAiConnection(env: Env, cookbook: Cookbook, action: "ask" | "c
 async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   const input = await readJsonObject(request, 16_000);
   const question = str(input.question, "a question", 4_000);
+  const docsQuery = str(input.docsQuery, "public documentation search terms", 160, true);
+  if (docsQuery && !(await docsMcpEnabled(env.DB))) {
+    throw new RequestError("OpenAI Docs search is disabled.", 403);
+  }
   const config = await openAiConnection(env, cookbook, "ask");
   const sources = new Map<string, { slug: string; id: string; title: string }>();
-  const answer = await runOpenAiAssistant(config, question, async (name, value) => {
-    if (name === "search_recipes") {
-      const { items } = await cookbook.search({ query: value, limit: 6 });
-      return { items: items.map(({ slug, title, summary }) => ({ slug, title, summary })) };
+  const docsSources: { url: string; title: string }[] = [];
+  let searchedDocs = false;
+  /**
+   * Look up the separately entered public terms once, checking the saved policy during the call.
+   */
+  async function searchDocs() {
+    const unavailable = { error: "OpenAI Docs search is unavailable." };
+    if (searchedDocs) {
+      return unavailable;
     }
-    // The published pointer is the only revision selector the model may use.
-    const { slug, id, title, files } = await cookbook.get({
-      slug: value,
-      parts: ["documentation", "source"],
-    });
-    sources.set(slug, { slug, id, title });
-    return {
-      slug,
-      title,
-      parts: Object.fromEntries(
-        Object.entries(files).map(([part, text]) => [
-          part,
-          { text: text.slice(0, 3_000), truncated: text.length > 3_000 },
-        ]),
-      ),
-    };
-  });
-  return json({ answer, sources: [...sources.values()] });
+    searchedDocs = true;
+    const hits = await searchOpenAiDocs(docsQuery, () => docsMcpEnabled(env.DB));
+    if (!hits) {
+      return unavailable;
+    }
+    docsSources.push(...hits.map(({ url, title }) => ({ url, title })));
+    return { hits };
+  }
+  const answer = await runOpenAiAssistant(
+    { ...config, searchDocs: docsQuery ? searchDocs : undefined },
+    question,
+    async (name, value) => {
+      if (name === "search_recipes") {
+        const { items } = await cookbook.search({ query: value, limit: 6 });
+        return { items: items.map(({ slug, title, summary }) => ({ slug, title, summary })) };
+      }
+      // The published pointer is the only revision selector the model may use.
+      const { slug, id, title, files } = await cookbook.get({
+        slug: value,
+        parts: ["documentation", "source"],
+      });
+      sources.set(slug, { slug, id, title });
+      return {
+        slug,
+        title,
+        parts: Object.fromEntries(
+          Object.entries(files).map(([part, text]) => [
+            part,
+            { text: text.slice(0, 3_000), truncated: text.length > 3_000 },
+          ]),
+        ),
+      };
+    },
+  );
+  return json({ answer, sources: [...sources.values()], docsSources });
 }
 
 export default {
@@ -447,7 +475,8 @@ export default {
       }
       if (
         !maintainer &&
-        (openAiPaths.has(url.pathname) || [mcpSettingsPath, mcpCheckPath].includes(url.pathname))
+        (openAiPaths.has(url.pathname) ||
+          [mcpSettingsPath, mcpCheckPath, docsMcpPath].includes(url.pathname))
       ) {
         throw new RequestError("Maintainer access required.", 403);
       }
@@ -461,7 +490,7 @@ export default {
             return json({ maintainer });
           case "/api/assistant": {
             const { model, configured } = await openAiStatus(env, cookbook);
-            return json({ model, configured });
+            return json({ model, configured, docsSearch: await docsMcpEnabled(env.DB) });
           }
           case "/api/settings/openai":
             return json(await openAiStatus(env, cookbook));
@@ -469,6 +498,8 @@ export default {
             return json({ ...(await readMcpSettings(env.DB, toolNames)), tools });
           case mcpCheckPath:
             return json({ tools: (await currentMcpTools(env.DB)).map(({ name }) => name) });
+          case docsMcpPath:
+            return json({ enabled: await docsMcpEnabled(env.DB) });
           case "/api/assistant/models": {
             const { key } = await openAiConnection(env, cookbook, "catalog");
             return json(await fetchOpenAiModelCatalog(key));
@@ -497,6 +528,9 @@ export default {
         }
         if (url.pathname === mcpSettingsPath) {
           return json(await saveMcpSettings(env.DB, await body(request), toolNames));
+        }
+        if (url.pathname === docsMcpPath) {
+          return json(await saveDocsMcp(env.DB, await body(request)));
         }
         if (url.pathname === "/api/settings/openai/remove-key") {
           await cookbook.reserveOpenAiRequest("settings");
