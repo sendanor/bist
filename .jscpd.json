@@ -1,0 +1,9 @@
+{
+  "minLines": 12,
+  "minTokens": 80,
+  "mode": "weak",
+  "format": ["javascript", "jsx", "typescript", "tsx", "css", "markup", "sql"],
+  "crossFormats": "js-ts",
+  "reporters": ["console"],
+  "noColors": true
+}

@@ -3,7 +3,6 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { Marked } from "marked";
 import ts from "typescript";
-import { findDuplicates } from "../src/quality/duplicates.js";
 import { checkTranslations } from "./translations.mjs";
 
 const root = process.cwd();
@@ -16,9 +15,6 @@ const virtual = new Map([
 ]);
 const builtins = new Set(builtinModules.flatMap((name) => [name, "node:" + name]));
 const problems = [];
-const warnings = [];
-const sources = [];
-const testSources = [];
 const documentPaths = [];
 const tsOptions = {
   moduleResolution: ts.ModuleResolutionKind.Bundler,
@@ -164,33 +160,6 @@ function moduleReferences(ast) {
   return references;
 }
 
-function lexicalTokens(ast) {
-  const tokens = [];
-  function visit(node) {
-    const children = node.getChildren(ast);
-    if (children.length) {
-      for (const child of children) {
-        visit(child);
-      }
-    } else if (
-      node.kind >= ts.SyntaxKind.FirstToken &&
-      node.kind <= ts.SyntaxKind.LastToken &&
-      node.kind !== ts.SyntaxKind.EndOfFileToken
-    ) {
-      const start = ast.getLineAndCharacterOfPosition(node.getStart(ast));
-      const end = ast.getLineAndCharacterOfPosition(node.end);
-      tokens.push({
-        value: node.getText(ast),
-        line: start.line + 1,
-        column: start.character + 1,
-        endLine: end.line + 1,
-      });
-    }
-  }
-  visit(ast);
-  return tokens;
-}
-
 async function inspectCode(file, text) {
   const name = relative(root, file);
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true);
@@ -226,10 +195,6 @@ async function inspectCode(file, text) {
       ts.forEachChild(node, visit);
     }
     visit(ast);
-  }
-  if (/^(?:src|tests)\//u.test(name) && !name.endsWith(".d.ts")) {
-    const group = name.startsWith("src/") ? sources : testSources;
-    group.push({ name, tokens: lexicalTokens(ast) });
   }
 }
 
@@ -333,19 +298,6 @@ async function checkDocs() {
 await collect(root);
 await checkDocs();
 problems.push(...(await checkTranslations()));
-for (const [files, findings] of [
-  [sources, problems],
-  [testSources, warnings],
-]) {
-  for (const match of findDuplicates(files)) {
-    findings.push(
-      `${match.name}:${match.line}:${match.column} Duplicates ${match.length} tokens from ${match.other}:${match.otherLine}. (duplicate-code)`,
-    );
-  }
-}
-for (const warning of warnings) {
-  console.warn(warning);
-}
 for (const problem of problems) {
   console.error(problem);
 }

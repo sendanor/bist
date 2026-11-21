@@ -6,14 +6,15 @@
   "scripts": {
     "test": "npm run test:unit && npm run build && node scripts/smoke.mjs",
     "build": "node scripts/build.mjs",
-    "check": "npm run check:secrets && npm run format:check && npm run lint && npm run typecheck && npm run check:project && npm run build",
+    "check": "npm run check:secrets && npm run format:check && npm run lint && npm run typecheck && npm run check:project && npm run check:duplicates && npm run build",
     "check:secrets": "node scripts/check-secrets.mjs",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "lint": "eslint . && stylelint src/**/*.css",
     "typecheck": "tsc",
     "check:project": "node scripts/check-project.mjs",
-    "test:unit": "node --experimental-test-coverage --test-coverage-include=src/line-diff.ts --test-coverage-include=src/read-json-object.ts --test-coverage-include=src/quality/rules.js --test-coverage-lines=75 --test-coverage-branches=60 --test-coverage-functions=75 --test tests/*.test.*"
+    "test:unit": "node --experimental-test-coverage --test-coverage-include=src/line-diff.ts --test-coverage-include=src/read-json-object.ts --test-coverage-include=src/quality/rules.js --test-coverage-lines=75 --test-coverage-branches=60 --test-coverage-functions=75 --test tests/*.test.*",
+    "check:duplicates": "jscpd --exit-code=1 --fail-on-empty src scripts drizzle && jscpd tests"
   },
   "keywords": [],
   "author": "",
@@ -42,6 +43,7 @@
     "eslint": "9.39.2",
     "globals": "16.5.0",
     "js-tiktoken": "1.0.21",
+    "jscpd": "5.4.3",
     "miniflare": "4.20260730.0",
     "stylelint": "16.26.1",
     "stylelint-config-standard": "39.0.1"
