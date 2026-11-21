@@ -31,6 +31,7 @@ const openAiPaths = new Set([
   "/api/settings/openai/remove-key",
 ]);
 const mcpSettingsPath = "/api/settings/mcp";
+const mcpCheckPath = mcpSettingsPath + "/check";
 const string = { type: "string" };
 const listing = {
   query: { type: "string", maxLength: 160 },
@@ -191,6 +192,15 @@ function message(error: unknown) {
 }
 
 /**
+ * Return the tool definitions currently advertised by the server.
+ * @param db The instance database holding MCP settings.
+ */
+async function currentMcpTools(db: Database) {
+  const settings = await readMcpSettings(db, toolNames);
+  return settings.enabled ? tools.filter(({ name }) => settings.enabledTools.includes(name)) : [];
+}
+
+/**
  * Handle a JSON-RPC request against the MCP recipe tools.
  * @param request The incoming MCP HTTP request.
  * @param cookbook The recipe service for the caller, or null when signed out.
@@ -237,11 +247,7 @@ async function mcp(request: Request, cookbook: Cookbook | null, db: Database) {
     return result({});
   }
   if (method === "tools/list") {
-    const settings = await readMcpSettings(db, toolNames);
-    const available = settings.enabled
-      ? tools.filter(({ name }) => settings.enabledTools.includes(name))
-      : [];
-    return result({ tools: available });
+    return result({ tools: await currentMcpTools(db) });
   }
   if (method !== "tools/call") {
     return fail(-32601, "Unknown method.");
@@ -439,7 +445,10 @@ export default {
       if (!cookbook) {
         throw new RequestError("Sign in with ChatGPT to access the cookbook.", 401);
       }
-      if (!maintainer && (openAiPaths.has(url.pathname) || url.pathname === mcpSettingsPath)) {
+      if (
+        !maintainer &&
+        (openAiPaths.has(url.pathname) || [mcpSettingsPath, mcpCheckPath].includes(url.pathname))
+      ) {
         throw new RequestError("Maintainer access required.", 403);
       }
       if (request.method === "GET") {
@@ -458,6 +467,8 @@ export default {
             return json(await openAiStatus(env, cookbook));
           case mcpSettingsPath:
             return json({ ...(await readMcpSettings(env.DB, toolNames)), tools });
+          case mcpCheckPath:
+            return json({ tools: (await currentMcpTools(env.DB)).map(({ name }) => name) });
           case "/api/assistant/models": {
             const { key } = await openAiConnection(env, cookbook, "catalog");
             return json(await fetchOpenAiModelCatalog(key));

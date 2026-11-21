@@ -1,5 +1,5 @@
 import { t } from "./localization.js";
-import { api, listMcpTools } from "./browser-api.js";
+import { api } from "./browser-api.js";
 import cssLanguage from "highlight.js/lib/languages/css";
 import { diffLines, sourceLines } from "./line-diff.ts";
 import { parsePagePath } from "./routes.ts";
@@ -2127,7 +2127,7 @@ async function assistantPage() {
   ];
 }
 
-/** Build the maintainer controls and a read-only check for Bist's MCP endpoint. */
+/** Build the maintainer controls and a read-only check for Bist's MCP tool list. */
 async function mcpSettingsForm() {
   const { enabled, enabledTools, tools } = await api("settings/mcp");
   const endpoint = new URL("/mcp", location.origin);
@@ -2139,12 +2139,8 @@ async function mcpSettingsForm() {
     check.disabled = true;
     status.textContent = "";
     try {
-      const available = await listMcpTools();
-      if (available) {
-        status.textContent = available.length ? t("mcp-check-ready") : t("mcp-check-empty");
-      } else {
-        status.textContent = t("mcp-check-failed");
-      }
+      const { tools: available } = await api("settings/mcp/check");
+      status.textContent = available.length ? t("mcp-check-ready") : t("mcp-check-empty");
     } catch {
       status.textContent = t("mcp-check-failed");
     } finally {

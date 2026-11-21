@@ -162,6 +162,7 @@ try {
   };
   assert.equal((await dispatch(mcpPath, null)).status, 401);
   assert.equal((await dispatch(mcpPath, "author")).status, 403);
+  assert.equal((await dispatch(mcpPath + "/check", "author")).status, 403);
   assert.equal((await dispatch(mcpPath, "author", mcpSelection)).status, 403);
   assert.equal(
     (await dispatch(mcpPath, "maintainer", { enabled: true, enabledTools: ["other"] })).status,
@@ -178,6 +179,9 @@ try {
     limitedTools.result.tools.map(({ name }) => name),
     ["search_recipes"],
   );
+  assert.deepEqual(await (await dispatch(mcpPath + "/check", "maintainer")).json(), {
+    tools: ["search_recipes"],
+  });
   const disabledCall = await (await dispatch("/mcp", "maintainer", readMcp)).json();
   assert.equal(disabledCall.result.isError, true);
   assert.match(disabledCall.result.content[0].text, /disabled/u);

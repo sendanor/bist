@@ -21,14 +21,3 @@ export async function api(path, data) {
   }
   return result;
 }
-
-/** Read the tool list from Bist's same-origin MCP endpoint without invoking a tool. */
-export async function listMcpTools() {
-  const response = await fetch("/mcp", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-  });
-  const { result } = await response.json();
-  return response.ok && Array.isArray(result?.tools) ? result.tools : null;
-}
