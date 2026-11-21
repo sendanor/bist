@@ -308,7 +308,7 @@ export class Cookbook {
   private async indexLegacySnapshots() {
     const limit = 24;
     const { results } = await this.sql(
-      "SELECT id, files, edit_version FROM revisions WHERE code_hash IS NULL AND files IS NOT NULL ORDER BY id LIMIT ?",
+      "SELECT id, files, edit_version FROM revisions WHERE unit_hashes IS NULL AND files IS NOT NULL ORDER BY id LIMIT ?",
       limit + 1,
     ).all<LegacySnapshot>();
     const statements = [];
@@ -317,7 +317,7 @@ export class Cookbook {
       const { snapshot, units } = await fingerprintRecipe(files);
       statements.push(
         this.sql(
-          "UPDATE revisions SET code_hash = ?, unit_hashes = ? WHERE id = ? AND edit_version = ? AND code_hash IS NULL AND files IS NOT NULL",
+          "UPDATE revisions SET code_hash = ?, unit_hashes = ? WHERE id = ? AND edit_version = ? AND unit_hashes IS NULL AND files IS NOT NULL",
           snapshot,
           JSON.stringify(units),
           row.id,
@@ -336,7 +336,10 @@ export class Cookbook {
     }
   }
 
-  private async assertNoDuplicate(hash: string, except: string | null) {
+  private async assertNoDuplicate(hash: string | null, except: string | null) {
+    if (hash === null) {
+      return;
+    }
     const existing = await this.sql(
       matchingSnapshot + " LIMIT 1",
       hash,

@@ -24,7 +24,7 @@ const tool = (name: string, description: string, properties: Input, required: st
 const tools = [
   tool(
     "search_recipes",
-    "Find published TypeScript recipes by purpose or tag. Returns summaries without files.",
+    "Find published recipes and guides by purpose or tag. Returns summaries without files.",
     { query: string, tag: string },
   ),
   tool(
@@ -43,7 +43,7 @@ const tools = [
   ),
   tool(
     "submit_recipe",
-    "Submit one complete recipe snapshot for human review. Use base to create a new revision, or replace with the ID and editVersion of your unapproved revision to update it in place. Include all files to retain.",
+    "Submit one complete recipe snapshot for human review. Use base to create a new revision, or replace with the ID and editVersion of your unapproved revision to update it in place. Include all parts to retain. Any part can stand alone, including documentation or agent instructions.",
     {
       slug: string,
       title: string,
@@ -55,7 +55,7 @@ const tools = [
       files: {
         type: "object",
         properties: files,
-        required: ["source"],
+        minProperties: 1,
         additionalProperties: false,
       },
     },

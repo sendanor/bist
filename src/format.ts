@@ -44,18 +44,11 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
     throw new Error("Provide a files object.");
   }
   const files = value;
-  if (!isString(files.source) || !files.source.trim()) {
-    throw new Error("Source is required.");
-  }
   const result: Partial<Record<Part, string>> = {};
   const encoder = new TextEncoder();
   const warnings: string[] = [];
   const errors: string[] = [];
   const sources: Partial<Record<keyof typeof virtualFiles, string>> = {};
-  const linter = new Linter({ configType: "eslintrc" });
-  for (const [name, rule] of Object.entries(bundledRules)) {
-    linter.defineRule(name, rule);
-  }
   for (const [key, content] of Object.entries(files)) {
     if (
       !parts.some((part) => part === key) ||
@@ -66,6 +59,16 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
     }
   }
   const recipeParts = parts.filter((part) => isString(files[part]) && files[part].trim());
+  if (!recipeParts.length) {
+    throw new Error("Provide at least one non-empty recipe part.");
+  }
+  const hasTypeScript = recipeParts.some((part) => Object.hasOwn(virtualFiles, part));
+  const linter = hasTypeScript ? new Linter({ configType: "eslintrc" }) : null;
+  if (linter) {
+    for (const [name, rule] of Object.entries(bundledRules)) {
+      linter.defineRule(name, rule);
+    }
+  }
   for (const key of recipeParts) {
     const content = files[key];
     if (!isString(content)) {
@@ -158,7 +161,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
     if (hasFormatIgnore) {
       throw new Error(`${key} contains a prettier-ignore directive.`);
     }
-    if (ast) {
+    if (ast && linter) {
       if (!Array.isArray(ast.tokens)) {
         throw new Error("TypeScript lint tokens are unavailable.");
       }
@@ -204,7 +207,7 @@ export async function normalizeFiles(value: unknown, policy: Policy = defaultCod
     }
     result[key as Part] = formatted;
   }
-  if (policy.quality.typeCheck !== "off" && errors.length === 0) {
+  if (hasTypeScript && policy.quality.typeCheck !== "off" && errors.length === 0) {
     const target = policy.quality.typeCheck === "error" ? errors : warnings;
     target.push(...checkRecipeTypes(sources, 20));
   }

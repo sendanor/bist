@@ -58,6 +58,7 @@ try {
     "0001_code_policy",
     "0002_revision_edit_version",
     "0003_recipe_fingerprints",
+    "0004_prose_recipes",
   ]) {
     const migration = await readFile("drizzle/" + name + ".sql", "utf8");
     await db.batch(
@@ -103,10 +104,55 @@ try {
   assert.equal(upgraded.eslint.curly, "error");
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
   const shell = await (await dispatch("/", null)).text();
-  assert.match(shell, /TypeScript recipes/);
+  assert.match(shell, /recipes and guides/);
   assert.doesNotMatch(shell, /\{\{t:/);
 
   const submit = (slug, files) => dispatch("/api/submit", "author", { ...payload, slug, files });
+  const guide = await tool("submit_recipe", {
+    ...payload,
+    slug: "architecture-guide",
+    files: { documentation: "# Architecture\nUse a service boundary." },
+  });
+  const guideFiles = await tool("get_recipe", { slug: guide.slug, revision: guide.id });
+  assert.deepEqual(guideFiles.files, {
+    documentation: "# Architecture\nUse a service boundary.\n",
+  });
+  const guideDecision = (action) =>
+    dispatch("/api/action", "maintainer", {
+      slug: guide.slug,
+      revision: guide.id,
+      action,
+      editVersion: 0,
+    });
+  assert.equal((await guideDecision("approve")).status, 200);
+  assert.equal((await guideDecision("publish")).status, 200);
+  assert.equal(
+    (await tool("get_recipe", { slug: guide.slug }, "reader")).files.documentation,
+    guideFiles.files.documentation,
+  );
+  const instruction = await submit("agent-guide", {
+    instructions: "# Agent instructions\nReview if applicable.",
+  });
+  assert.equal(instruction.status, 201);
+  assert.equal((await submit("empty-guide", { documentation: "   ", source: "\n" })).status, 400);
+  const proseHash = await db
+    .prepare("SELECT code_hash, unit_hashes FROM revisions WHERE id = ?")
+    .bind(guide.id)
+    .first();
+  assert.equal(proseHash.code_hash, null);
+  assert.equal(proseHash.unit_hashes, "{}");
+  assert.equal(
+    (
+      await dispatch("/api/action", "maintainer", {
+        slug: guide.slug,
+        revision: guide.id,
+        action: "quarantine",
+        reason: "Hide the QA guide from later assertions.",
+      })
+    ).status,
+    200,
+  );
+
   const legacySlug = "legacy-fingerprint";
   const legacyId = crypto.randomUUID();
   const legacyFiles = { source: "export const legacy = {label: 'keep two  spaces'};" };

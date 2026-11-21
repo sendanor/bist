@@ -152,7 +152,7 @@ async function library() {
       "section",
       { className: "hero" },
       el("h1", {}, t("recipe-library")),
-      el("p", {}, t("find-small-adaptable-typescript-recipes-reviewed-by-your")),
+      el("p", {}, t("find-recipes-and-guides")),
     ),
     form,
     el("h2", {}, filters.query || filters.tag ? t("search-results") : t("published-recipes")),
@@ -287,9 +287,8 @@ function contribute(recipe, replace = false) {
       .map(([key, name]) =>
         field(
           key,
-          name + (key === "source" ? "" : t("optional")),
+          name,
           {
-            required: key === "source" ? "" : undefined,
             maxlength: 12000,
             class: key === "source" || key === "interface" || key === "tests" ? "code-input" : "",
             spellcheck: "false",
@@ -317,7 +316,7 @@ function contribute(recipe, replace = false) {
   return [
     title(
       replace ? t("edit-draft") : isRevision ? t("improve-recipe") : t("contribute-a-recipe"),
-      t("submit-a-complete-recipe-snapshot-for-review-each"),
+      t("recipe-at-least-one-part"),
     ),
     form,
   ];

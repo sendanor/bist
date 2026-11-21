@@ -5,7 +5,7 @@ const codeParts = ["source", "interface", "tests", "styles"] as const;
 
 /** Fingerprints of the complete code snapshot and each of its code parts. */
 export interface RecipeFingerprint {
-  readonly snapshot: string;
+  readonly snapshot: string | null;
   readonly units: Partial<Record<(typeof codeParts)[number], string>>;
 }
 
@@ -84,6 +84,8 @@ export async function fingerprintRecipe(files: Readonly<Partial<Record<string, s
       units[part] = await digest(JSON.stringify(["bist-unit-v1", part, canonical]));
     }
   }
-  const snapshot = await digest(JSON.stringify(["bist-snapshot-v1", units]));
+  const snapshot = Object.keys(units).length
+    ? await digest(JSON.stringify(["bist-snapshot-v1", units]))
+    : null;
   return { snapshot, units };
 }
