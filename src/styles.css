@@ -1374,6 +1374,22 @@ main,
   border-radius: 8px;
 }
 
+.file-comment-thread {
+  margin-block: 0 12px;
+}
+
+.file-comment-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-comment-heading h4 {
+  margin: 0;
+}
+
 .review-line {
   display: grid;
   grid-template-columns: minmax(3rem, auto) minmax(0, 1fr);
@@ -1387,7 +1403,7 @@ main,
 }
 
 .review-line > code,
-.historical-line-comment > code {
+.historical-comment > code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1414,9 +1430,9 @@ main,
   min-width: 0;
 }
 
-.line-comment,
-.line-comment-form,
-.historical-line-comment {
+.review-comment,
+.review-comment-form,
+.historical-comment {
   margin: 6px 0;
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -1424,23 +1440,23 @@ main,
   background: var(--paper);
 }
 
-.line-comment p {
+.review-comment p {
   margin: 2px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.line-comment-form textarea {
+.review-comment-form textarea {
   width: 100%;
 }
 
-.line-comment-actions {
+.review-comment-actions {
   display: flex;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.earlier-line-comments h4 {
+.earlier-comments h4 {
   margin-block: 16px 6px;
 }

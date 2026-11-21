@@ -12,9 +12,11 @@ revision, propose an improvement. This creates a new revision that needs its own
 
 Maintain a separation between review and publication. A maintainer can approve a revision
 or request changes. Publishing an approved revision makes it the default in search.
-**Line comments** let maintainers leave feedback on any part, including Markdown and blank
-lines. The author and maintainers can read the feedback. After a draft edit, earlier comments
-retain their original excerpts under **Comments on earlier edits**.
+Open **Comments** on a file part to review it. Maintainers can select **Comment on file**
+to discuss the whole file or select a line number to comment on an individual line,
+including Markdown and blank lines. The author and maintainers can read the feedback.
+After a draft edit, earlier comments appear under **Comments on earlier edits**, with
+the original excerpt preserved for each line comment.
 
 Authors can remove their own unapproved revisions, including revisions with changes requested.
 Protected removal requires a reason and maintainer action. Quarantining a revision hides it

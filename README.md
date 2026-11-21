@@ -9,7 +9,7 @@ before sharing it, and retrieve the parts you need for another project.
 - Submit TypeScript, public interfaces, tests, CSS, documentation, or agent instructions. A guide
   can consist of documentation or instructions alone.
 - Review a specific revision before publishing it. Maintainers can compare edits and leave private
-  comments on individual lines, including lines in Markdown files.
+  comments on whole files or individual lines, including lines in Markdown files.
 
 ![The isRecord recipe in Code Cookbook with the sidebar, toolbar, documentation, source, and tests.](docs/is-record.jpg)
 

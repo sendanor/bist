@@ -103,6 +103,36 @@ try {
       migration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
     );
   }
+  const legacyReviewRevision = "00000000-0000-4000-8000-000000000006";
+  await db.batch([
+    db.prepare("INSERT INTO recipes (slug, owner) VALUES ('legacy-comment', 'legacy-author')"),
+    db
+      .prepare(
+        `INSERT INTO revisions (id, slug, author, title, summary, tags, files)
+         VALUES (?, 'legacy-comment', 'legacy-author', 'Legacy recipe', 'Migration fixture', '[]', '{}')`,
+      )
+      .bind(legacyReviewRevision),
+    db
+      .prepare(
+        `INSERT INTO revision_line_comments (revision, edit_version, part, line, excerpt, body, reviewer)
+         VALUES (?, 0, 'documentation', 2, 'Previous line', 'Previous comment', 'maintainer')`,
+      )
+      .bind(legacyReviewRevision),
+  ]);
+  const commentMigration = await readFile("drizzle/0007_revision_comments.sql", "utf8");
+  await db.batch(
+    commentMigration.split("--> statement-breakpoint").map((sql) => db.prepare(sql.trim())),
+  );
+  const legacyReview = await db
+    .prepare("SELECT line, excerpt, body FROM revision_comments WHERE revision = ?")
+    .bind(legacyReviewRevision)
+    .first();
+  assert.deepEqual(legacyReview, { line: 2, excerpt: "Previous line", body: "Previous comment" });
+  await db
+    .prepare("UPDATE revisions SET state = 'removed', files = NULL WHERE id = ?")
+    .bind(legacyReviewRevision)
+    .run();
+
   assert.equal((await dispatch("/api/search", null)).status, 401);
   const payload = {
     slug: "batch-items",
@@ -627,7 +657,9 @@ describe("hasFields", () => {
     line: 3,
     body: "Explain the <boundary>.",
   };
+  const fileFeedback = { ...feedback, line: null, body: "Clarify the scope of this guide." };
   assert.equal((await dispatch("/api/comment", "author", feedback)).status, 403);
+  assert.equal((await dispatch("/api/comment", "author", fileFeedback)).status, 403);
   assert.equal(
     (await dispatch("/api/comment", "maintainer", { ...feedback, line: 4 })).status,
     400,
@@ -636,6 +668,21 @@ describe("hasFields", () => {
     (await dispatch("/api/comment", "maintainer", { ...feedback, part: "tests" })).status,
     400,
   );
+  assert.equal(
+    (await dispatch("/api/comment", "maintainer", { ...fileFeedback, part: "tests" })).status,
+    400,
+  );
+  assert.equal(
+    (await dispatch("/api/comment", "maintainer", { ...fileFeedback, line: 0 })).status,
+    400,
+  );
+  const filePosted = await dispatch("/api/comment", "maintainer", fileFeedback);
+  assert.equal(filePosted.status, 201);
+  const fileNote = await filePosted.json();
+  assert.equal(fileNote.part, "documentation");
+  assert.equal(fileNote.line, null);
+  assert.equal(fileNote.excerpt, null);
+  assert.equal(fileNote.body, fileFeedback.body);
   const posted = await dispatch("/api/comment", "maintainer", feedback);
   assert.equal(posted.status, 201);
   const note = await posted.json();
@@ -654,6 +701,10 @@ describe("hasFields", () => {
   const authorReview = (await (await dispatch(reviewPath, "author")).json()).review;
   assert.equal(authorReview.canComment, false);
   assert.ok(authorReview.comments.some(({ id }) => id === note.id));
+  assert.deepEqual(
+    authorReview.comments.find(({ id }) => id === fileNote.id),
+    fileNote,
+  );
   assert.equal((await dispatch(reviewPath, "reader")).status, 404);
   const replace = {
     ...payload,
@@ -695,10 +746,15 @@ describe("hasFields", () => {
   assert.equal(saved.id, draft.id);
   assert.equal(saved.editVersion, 1);
   assert.equal((await dispatch("/api/comment", "maintainer", feedback)).status, 409);
+  assert.equal((await dispatch("/api/comment", "maintainer", fileFeedback)).status, 409);
   const oldFeedback = (await (await dispatch(reviewPath, "author")).json()).review.comments;
   assert.deepEqual(
     oldFeedback.find(({ id }) => id === note.id),
     note,
+  );
+  assert.deepEqual(
+    oldFeedback.find(({ id }) => id === fileNote.id),
+    fileNote,
   );
   assert.equal(
     (await tool("my_revisions", {})).filter(({ slug }) => slug === draft.slug).length,
@@ -755,7 +811,7 @@ describe("hasFields", () => {
         ...duplicateRef,
         editVersion: duplicate.editVersion,
         part: "source",
-        line: 1,
+        line: undefined,
       })
     ).status,
     201,
@@ -765,7 +821,7 @@ describe("hasFields", () => {
   assert.equal((await duplicateAction("author", "remove_draft")).status, 200);
   assert.equal(
     await db
-      .prepare("SELECT id FROM revision_line_comments WHERE revision = ?")
+      .prepare("SELECT id FROM revision_comments WHERE revision = ?")
       .bind(duplicate.id)
       .first(),
     null,

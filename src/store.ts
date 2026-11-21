@@ -62,13 +62,13 @@ interface LegacySnapshot {
   readonly edit_version: number;
 }
 
-/** Private review feedback anchored to a line of a specific saved edit. */
-interface LineComment {
+/** Private review feedback anchored to a file or line of a specific saved edit. */
+interface ReviewComment {
   readonly id: number;
   readonly editVersion: number;
   readonly part: string;
-  readonly line: number;
-  readonly excerpt: string;
+  readonly line: number | null;
+  readonly excerpt: string | null;
   readonly body: string;
 }
 
@@ -445,11 +445,11 @@ export class Cookbook {
             comments: (
               await this.sql(
                 `SELECT id, edit_version AS editVersion, part, line, excerpt, body
-             FROM revision_line_comments WHERE revision = ? AND edit_version <= ?
+             FROM revision_comments WHERE revision = ? AND edit_version <= ?
              ORDER BY edit_version DESC, part, line, id`,
                 row.id,
                 row.edit_version,
-              ).all<LineComment>()
+              ).all<ReviewComment>()
             ).results,
           }
         : undefined;
@@ -475,23 +475,22 @@ export class Cookbook {
     };
   }
   /**
-   * Save a maintainer's private feedback against an exact line of the current edit.
-   * @param input Revision ID, slug, edit version, part, one-based line and comment body.
-   * @throws {RequestError} When the caller lacks access, the line is invalid, or the edit has changed.
+   * Save a maintainer's private feedback on the whole file or a line of the current edit.
+   * @param input Revision ID, slug, edit version, part, optional one-based line and comment body.
+   * @throws {RequestError} When access is denied, the file or line is invalid, or the edit has changed.
    */
   async comment(input: Input) {
     this.maintainer();
     const slug = str(input.slug, "recipe slug", 64);
     const id = revisionId(input.revision, "revision ID");
     const version = snapshotVersion(input.editVersion);
-    const { part, line } = input;
+    const { part } = input;
+    const line = input.line ?? null;
     if (
       !isRecipePart(part) ||
-      typeof line !== "number" ||
-      !Number.isSafeInteger(line) ||
-      line < 1
+      (line !== null && (typeof line !== "number" || !Number.isSafeInteger(line) || line < 1))
     ) {
-      throw new RequestError("Choose a valid file part and line number.");
+      throw new RequestError("Choose a valid file part and, for a line comment, a line number.");
     }
     const body = str(input.body, "a comment", 2000);
     const row = await this.sql(
@@ -502,17 +501,20 @@ export class Cookbook {
     if (!row) {
       throw new RequestError("Recipe revision not found.", 404);
     }
-    const stale = "This revision changed. Reload it before adding a line comment.";
+    const stale = "This revision changed. Reload it before adding a comment.";
     if (row.edit_version !== version) {
       throw new RequestError(stale, 409);
     }
     const file = decodeFiles(row.files, [part])[part];
-    const excerpt = file === undefined ? undefined : sourceLines(file)[line - 1];
+    if (file === undefined) {
+      throw new RequestError("This file part does not exist in the selected revision.");
+    }
+    const excerpt = line === null ? null : sourceLines(file)[line - 1];
     if (excerpt === undefined) {
       throw new RequestError("This line does not exist in the selected file part.");
     }
     const saved = await this.sql(
-      `INSERT INTO revision_line_comments (revision, edit_version, part, line, excerpt, body, reviewer)
+      `INSERT INTO revision_comments (revision, edit_version, part, line, excerpt, body, reviewer)
        SELECT id, edit_version, ?, ?, ?, ?, ? FROM revisions
        WHERE id = ? AND slug = ? AND edit_version = ? AND state != 'removed'
        RETURNING id, edit_version AS editVersion, part, line, excerpt, body`,
@@ -524,7 +526,7 @@ export class Cookbook {
       id,
       slug,
       version,
-    ).first<LineComment>();
+    ).first<ReviewComment>();
     if (!saved) {
       throw new RequestError(stale, 409);
     }
