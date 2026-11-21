@@ -2,6 +2,8 @@
 
 A TypeScript Worker with a browser workspace and a stateless MCP endpoint. Both surfaces use the same D1 database. A recipe can contain code, documentation, agent instructions, or any combination of these. At least one part is required. The cookbook handles recipe files as text and applies bundled Prettier and ESLint to TypeScript parts. Maintainers can configure formatting, lint, type, and optional stylesheet checks in Settings. See the [quality policy](QUALITY.md). The policy applies to new revisions submitted through the website and MCP. Submitted files are never run by the service.
 
+![The isRecord recipe in Code Cookbook, showing its documentation and TypeScript source.](docs/is-record.jpg)
+
 ## Development
 
 Run `npm ci`, `npm run check`, `npm run build`, and `node scripts/smoke.mjs`. The smoke test uses the actual Worker bundle in workerd, applies the D1 migration, verifies the author/maintainer/reader flow and persistence across runtime restart, and executes a known fixture in a separate consumer project. It reports measured reuse latency and selective versus full retrieval payload sizes and tokens using the o200k_base tokenizer.
