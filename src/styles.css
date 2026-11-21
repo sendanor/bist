@@ -910,10 +910,6 @@ main,
   color: #bac1dc;
 }
 
-.rail nav a[aria-current="page"] {
-  box-shadow: inset 3px 0 #b9acff;
-}
-
 .rail nav a[aria-current="page"] .ui-icon {
   color: #e1dbff;
 }
@@ -1082,7 +1078,6 @@ main,
   .rail nav a:hover {
     background: #eeebfa;
     color: #493a9b;
-    box-shadow: none;
   }
 
   .rail nav a[aria-current="page"] .ui-icon {
