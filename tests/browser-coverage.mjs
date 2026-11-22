@@ -461,6 +461,13 @@ async function verifyContribution(window) {
     "[Public reference](https://example.test/guide) and [local reference](./guide.md).\n\n" +
     "| Action | Result |\n| --- | --- |\n| Save | Pending |";
   form.elements.documentation.value = markdown;
+  entry.value = "one,two,three,four,five,six,seven,eight";
+  form.requestSubmit();
+  assert.match(entry.validationMessage, /eight tags/u);
+  assert.equal(window.location.pathname, "/contribute");
+  assert.equal(form.querySelector("[type=submit]").disabled, false);
+  entry.value = "";
+  entry.dispatchEvent(new window.Event("input", { bubbles: true }));
   form.elements["filename-documentation"].value = "guide.exe";
   form.requestSubmit();
   await eventually(
@@ -732,6 +739,25 @@ async function verifyHistoricalComments(window, dispatch) {
     pending.resolve();
     window.fetch = fetch;
   }
+  const addition = "New instructions for verifying the revised example.";
+  const proposed = await dispatch("/api/submit", actor, {
+    ...recipe,
+    title: "Proposal containing a new file",
+    base: id,
+    files: { instructions: addition },
+  });
+  assert.equal(proposed.status, 201);
+  const created = await proposed.json();
+  window.history.pushState(null, "", "/recipe/review/" + recipe.slug + "/" + created.id);
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  await eventually(
+    () => view.querySelector("h1")?.textContent === "Proposal containing a new file",
+    "revision with a new file opened",
+  );
+  const newFile = view.querySelector("#recipe-part-title-instructions").closest("section");
+  newFile.querySelector('button[aria-label="Show changes"]').click();
+  assert.equal(newFile.querySelectorAll(".diff-removed").length, 0);
+  assert.match(newFile.querySelector(".diff-added").textContent, /New instructions/u);
 }
 
 /**
