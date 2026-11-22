@@ -46,3 +46,17 @@ test("spacing preserves JSX text, overload groups, directives and the selected l
   assert.equal(spaced, source.replace("\r\n//", "\r\n\r\n//").replace("\r\n/**", "\r\n\r\n/**"));
   assert.equal(spaceDeclarations(spaced, "example.tsx"), spaced);
 });
+
+test("spacing falls back to TypeScript for casts and leaves malformed code intact", () => {
+  assert.equal(
+    spaceDeclarations('function a() { return <string>"hello"; } function b() {}'),
+    'function a() { return <string>"hello"; }\n\n function b() {}',
+  );
+  const incomplete = "function broken( {";
+  assert.equal(spaceDeclarations(incomplete), incomplete);
+  assert.equal(spaceDeclarations(incomplete, "example.ts"), incomplete);
+  assert.equal(
+    spaceDeclarations("function a() {} /* same-line note */ /** About b. */ function b() {}"),
+    "function a() {} /* same-line note */\n\n /** About b. */ function b() {}",
+  );
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { searchOpenAiDocs } from "../src/openai-docs-mcp.ts";
+import { searchContext7, searchOpenAiDocs } from "../src/openai-docs-mcp.ts";
 
 const protocol = "2025-11-25";
 
@@ -171,5 +171,50 @@ describe("OpenAI documentation MCP transport", () => {
       ),
       null,
     );
+  });
+});
+
+describe("Context7 documentation lookup", () => {
+  it("sends an exact library query and limits the returned excerpt", async (context) => {
+    const excerpt = "a".repeat(2_510);
+    const response = reply(2, { content: [{ type: "text", text: excerpt }] });
+    const transport = searchTransport(response);
+    context.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+      assert.equal(url, "https://mcp.context7.com/mcp");
+      const message = JSON.parse(String(options.body));
+      if (message.method === "tools/call") {
+        assert.deepEqual(message.params, {
+          name: "query-docs",
+          arguments: { query: "State example", libraryId: "/fixture/ui" },
+        });
+      }
+      return transport(url, options);
+    });
+    assert.equal(
+      await searchContext7("State example", "/fixture/ui", async () => true),
+      excerpt.slice(0, 2_500),
+    );
+  });
+
+  it("treats declined, malformed and timed-out documentation replies as unavailable", async (context) => {
+    let response = reply(2, { isError: true });
+    context.mock.method(globalThis, "fetch", (url: string, options: RequestInit) =>
+      searchTransport(response)(url, options),
+    );
+    assert.equal(await searchContext7("State", "/fixture/ui", async () => true), null);
+    response = reply(2, { content: [{ type: "resource", uri: "https://example.test/" }] });
+    assert.equal(await searchContext7("State", "/fixture/ui", async () => true), null);
+    context.mock.method(AbortSignal, "timeout", () =>
+      AbortSignal.abort(new DOMException("Fixture timed out", "TimeoutError")),
+    );
+    const result = await searchOpenAiDocs(
+      "State",
+      async () => true,
+      async (_url, options) => {
+        options?.signal?.throwIfAborted();
+        return assert.fail("request continued after the deadline");
+      },
+    );
+    assert.equal(result, null);
   });
 });
