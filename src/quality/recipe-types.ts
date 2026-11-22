@@ -96,8 +96,8 @@ export function checkRecipeTypes(
     },
     /** Use the pinned ES2022 declaration file as the compiler default. */
     getDefaultLibFileName: () => "/lib.es2022.d.ts",
-    /** Discard writes because recipe checking only reports diagnostics. */
-    writeFile: () => {},
+    // Function.prototype is a no-op. The virtual host never writes compiler output.
+    writeFile: Function.prototype as ts.WriteFileCallback,
     /** Resolve all compiler paths relative to the virtual root. */
     getCurrentDirectory: () => "/",
     /**
@@ -154,6 +154,7 @@ export function checkRecipeTypes(
       const { line, character } = entry.file.getLineAndCharacterOfPosition(entry.start);
       location = `${part ?? entry.file.fileName}:${line + 1}:${character + 1}`;
     }
-    return `${location} ${ts.flattenDiagnosticMessageText(entry.messageText, " ")} (TS${entry.code})`;
+    const detail = ts.flattenDiagnosticMessageText(entry.messageText, host.getNewLine());
+    return `${location} ${detail} (TS${entry.code})`;
   });
 }

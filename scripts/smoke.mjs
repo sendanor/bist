@@ -919,6 +919,18 @@ describe("hasFields", () => {
   });
   assert.equal(crossPartMismatch.status, 400);
   assert.match((await crossPartMismatch.json()).error, /tests:1:51.*TS2322/);
+  const nestedMismatch = await submit("nested-type-diagnostic", {
+    source: [
+      "type Expected = { readonly inner: { readonly count: number } };",
+      'const actual = { inner: { count: "wrong" } };',
+      "export const result: Expected = actual;",
+    ].join("\n"),
+  });
+  assert.equal(nestedMismatch.status, 400);
+  const nestedMessage = (await nestedMismatch.json()).error;
+  assert.match(nestedMessage, /^source:3:\d+ /u);
+  assert.match(nestedMessage, /\n +The types of 'inner.count' are incompatible/u);
+  assert.match(nestedMessage, /\n +Type 'string' is not assignable to type 'number'\. \(TS2322\)/u);
   const referenceFixture = {
     source:
       '/// <reference path="./interface.d.ts" />\nimport type { RecipeValue } from "./interface.js";\nexport const result: RecipeValue = "ok";',
