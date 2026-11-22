@@ -113,17 +113,20 @@ export async function normalizeFiles(
   if (!isRecord(value)) {
     throw new Error("Provide a files object.");
   }
-  const files = value;
   const result: Partial<Record<Part, string>> = {};
   const warnings: string[] = [];
   const errors: string[] = [];
   const sources: Partial<Record<keyof typeof virtualFiles, string>> = {};
-  for (const [key, content] of Object.entries(files)) {
+  for (const [key, content] of Object.entries(value)) {
     if (!parts.some((part) => part === key) || !isRecipeFileText(content)) {
       throw new Error("Use supported file parts of at most 12 KB each.");
     }
   }
-  const recipeParts = parts.filter((part) => isString(files[part]) && files[part].trim());
+  const recipeFiles = parts.flatMap((part) => {
+    const content = value[part];
+    return isString(content) && content.trim() ? [{ part, content }] : [];
+  });
+  const recipeParts = recipeFiles.map(({ part }) => part);
   if (!recipeParts.length) {
     throw new Error("Provide at least one non-empty recipe part.");
   }
@@ -135,11 +138,7 @@ export async function normalizeFiles(
       linter.defineRule(name, rule);
     }
   }
-  for (const key of recipeParts) {
-    const content = files[key];
-    if (!isString(content)) {
-      continue;
-    }
+  for (const { part: key, content } of recipeFiles) {
     if (key === "documentation" || key === "instructions") {
       result[key] = content.replace(/\r\n?/g, "\n").trimEnd() + "\n";
       continue;
