@@ -126,6 +126,44 @@ async function verifyAssistantStartup(window) {
 }
 
 /**
+ * Finish loading a chat after it closes, keeping focus and omitting unavailable documentation tools.
+ * @param dispatch Authenticated test transport for the temporary browser.
+ * @param directory Coverage output directory shared with the browser suite.
+ */
+async function verifyAssistantWithoutDocs(dispatch, directory) {
+  const window = await openPage(dispatch, "/library", "maintainer");
+  try {
+    const { document } = window;
+    const toggle = document.querySelector("#assistant-toggle");
+    const panel = document.querySelector("#assistant-panel");
+    const pending = Promise.withResolvers();
+    replyOnce(window, "/api/assistant", pending.promise);
+    toggle.click();
+    assert.match(panel.textContent, /Loading Assistant/u);
+    toggle.click();
+    assert.equal(panel.hidden, true);
+    pending.resolve(Response.json({ configured: true, docsSearch: false, context7Search: false }));
+    await eventually(
+      () => Boolean(panel.querySelector("form")),
+      "hidden assistant finished loading",
+    );
+    assert.equal(document.activeElement, toggle);
+    toggle.click();
+    const form = panel.querySelector("form");
+    assert.ok(form.elements.question);
+    assert.equal(form.elements.libraryId, undefined);
+    assert.equal(form.querySelector('[aria-controls="assistant-docs-options"]'), null);
+    assert.equal(document.activeElement, form.elements.question);
+    await writeFile(
+      join(directory, "browser-assistant-no-docs.json"),
+      JSON.stringify(window.__coverage__),
+    );
+  } finally {
+    window.close();
+  }
+}
+
+/**
  * Check Assistant exchanges, reference fields, failure recovery and retained panel state.
  * @param window Maintainer's application window.
  */
@@ -485,6 +523,12 @@ async function verifyLibrarySearch(window) {
     () => document.querySelectorAll(".recipe").length === 1,
     "only the published fixture matches",
   );
+  const quoted = document.querySelector("form.search");
+  quoted.elements.query.value = 'tag:"release notes"';
+  quoted.requestSubmit();
+  assert.deepEqual(new URLSearchParams(window.location.search).getAll("tag"), ["release notes"]);
+  await eventually(() => !quoted.isConnected, "tag with spaces round-tripped");
+  assert.equal(document.querySelector('input[name="query"]').value, 'tag:"release notes"');
   const invalidEscape = 'tag:"\\U0041"';
   const tagForm = document.querySelector("form.search");
   tagForm.elements.query.value = invalidEscape;
@@ -1010,6 +1054,11 @@ async function verifyProposalComparison(window) {
   docs.querySelector('button[aria-label="Show changes"]').click();
   assert.match(docs.textContent, /Compared with base revision/u);
   assert.match(docs.textContent, /A new usage example/u);
+  const wrap = docs.querySelector('button[aria-label="Wrap lines"]');
+  wrap.click();
+  assert.equal(wrap.getAttribute("aria-pressed"), "false");
+  assert.ok(docs.querySelector(".code-box"));
+  assert.equal(docs.querySelector(".code-box").classList.contains("wrap"), false);
   docs.querySelector('button[aria-label="Show file"]').click();
   assert.equal(docs.querySelector("h4").textContent, "Comparison guide");
   const oldInstructions = document.querySelector("#recipe-part-content-instructions");
@@ -1858,6 +1907,53 @@ async function verifyAuthorRemoval(window, dispatch) {
   );
   const params = new URLSearchParams({ slug, revision });
   assert.equal((await dispatch("/api/recipe?" + params, "browser-author")).status, 404);
+  window.history.replaceState(null, "", "/assistant?query=compatibility");
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Recipe library",
+    "author's legacy Assistant bookmark opens the library",
+  );
+  assert.equal(window.location.pathname, "/library");
+  assert.equal(window.location.search, "?query=compatibility");
+  assert.equal(document.querySelector("#assistant-panel").hidden, true);
+}
+
+/**
+ * Publish and display a code-only recipe without advertising an instructions download.
+ * @param window Maintainer's browser used to read the public revision.
+ * @param dispatch Test transport used to submit and publish the recipe.
+ */
+async function verifySourceOnlyPublication(window, dispatch) {
+  const recipe = {
+    slug: "browser-source-only-fixture",
+    title: "Source-only browser recipe",
+    summary: "Expose a code example through the published recipe viewer.",
+    files: { source: "export const defaultRecipeBatchSize = 17;" },
+  };
+  const submission = await dispatch("/api/submit", "source-only-fixture", recipe);
+  assert.equal(submission.status, 201);
+  const { id, editVersion } = await submission.json();
+  for (const action of ["approve", "publish"]) {
+    const response = await dispatch("/api/action", "maintainer", {
+      action,
+      slug: recipe.slug,
+      revision: id,
+      editVersion,
+    });
+    assert.equal(response.status, 200, action);
+  }
+  window.history.pushState(null, "", "/recipe/library/" + recipe.slug + "/" + id);
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  const view = window.document.querySelector("#view");
+  await eventually(
+    () => view.querySelector("h1")?.textContent === recipe.title,
+    "code-only publication displayed",
+  );
+  assert.match(
+    view.querySelector("#recipe-part-content-source").textContent,
+    /defaultRecipeBatchSize/u,
+  );
+  assert.equal(view.querySelector('.recipe-byline a[href^="/api/skill"]'), null);
 }
 
 /**
@@ -1869,6 +1965,7 @@ async function verifyAuthorRemoval(window, dispatch) {
  */
 export async function exerciseBrowser(dispatch, directory, draft, key) {
   await verifySignedOutNavigation(dispatch, directory);
+  await verifyAssistantWithoutDocs(dispatch, directory);
   const maintainer = await openPage(dispatch, "/library", "maintainer");
   try {
     await verifyLibrarySearch(maintainer);
@@ -1909,6 +2006,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
     await verifyReviewerComments(reviewer);
     await verifyReviewDecisions(reviewer, dispatch, draft);
     await verifyHistoricalComments(reviewer, dispatch);
+    await verifySourceOnlyPublication(reviewer, dispatch);
     await writeFile(
       join(directory, "browser-reviewer.json"),
       JSON.stringify(reviewer.__coverage__),
