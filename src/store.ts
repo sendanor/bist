@@ -10,6 +10,7 @@ import {
 import { normalizeFiles, parts, recipeFileNames, type Part, type RecipeFileNames } from "./format";
 import { sourceLines } from "./line-diff";
 import { fingerprintRecipe, type RecipeFingerprint } from "./quality/recipe-hash";
+import { recipeErrorMessage } from "./quality/recipe-diagnostics";
 import { defaultReviewPolicy } from "./quality/review-defaults.ts";
 export interface Statement {
   /**
@@ -1036,7 +1037,7 @@ export class Cookbook {
     try {
       return await normalizeFiles(files, policy, requestedNames, inheritedNames);
     } catch (error) {
-      throw new RequestError(error instanceof Error ? error.message : "Recipe validation failed.");
+      throw new RequestError(recipeErrorMessage(error));
     }
   }
 

@@ -130,6 +130,10 @@ async function verifySettingsValidation(dispatch) {
     [{ prettier: { fixtureStyle: true } }, /Unsupported Prettier setting/u],
     [{ eslint: { "fixture-unknown-rule": "warn" } }, /Unknown bundled ESLint rule/u],
     [{ eslint: { eqeqeq: "optional" } }, /Invalid severity/u],
+    [
+      { eslint: { "react-hooks/rules-of-hooks": ["error", {}] } },
+      /Invalid options for react-hooks\/rules-of-hooks/u,
+    ],
     [{ globals: { fixtureValue: "optional" } }, /Invalid ESLint global/u],
     [{ quality: { warningsAsErrors: "yes" } }, /warningsAsErrors must be a boolean/u],
     [{ quality: { duplicateCode: "maybe" } }, /Invalid severity for duplicateCode/u],
@@ -288,6 +292,19 @@ async function verifyVirtualModules(dispatch) {
   };
   assert.equal((await dispatch(settingsPath, "maintainer", compilerOnly)).status, 200);
   try {
+    await expectError(
+      dispatch,
+      "/api/submit",
+      "author",
+      {
+        ...recipe,
+        files: {
+          source: '/// <reference no-default-lib="true" />\nexport const value = 1;',
+        },
+      },
+      400,
+      /^recipe .*Cannot find global type.*\(TS2318\)/u,
+    );
     for (const specifier of ["./interface.js", "./absent-module.js"]) {
       const response = await dispatch("/api/submit", "author", {
         ...recipe,

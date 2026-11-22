@@ -29,6 +29,9 @@ const testLibraries = [
 ];
 
 const cachedLibraries = new Map<string, ts.SourceFile>();
+const pinnedFiles = new Map(
+  Object.entries(libraries).map(([name, content]) => [name, { label: name, content }]),
+);
 
 const extensions: Readonly<Record<string, ts.Extension>> = {
   ".d.ts": ts.Extension.Dts,
@@ -59,16 +62,26 @@ function recipeExtension(filename: string) {
  * @param limit The diagnostic limit enforced for a single snapshot.
  */
 export function checkRecipeTypes(sources: readonly RecipeTypeFile[], limit: number): string[] {
-  const files = new Map(sources.map((file) => ["/recipe/" + file.name, file]));
+  const files = new Map(
+    sources.map(({ name, part, content }) => ["/recipe/" + name, { label: part, content }]),
+  );
   const names = Object.fromEntries(sources.map(({ part, name }) => [part, name]));
   const parsedFiles = new Map<string, ts.SourceFile>();
+
+  /**
+   * Find a virtual file with the label used in recipe diagnostics.
+   * @param name The absolute path of a submitted file or a pinned declaration.
+   */
+  function virtualFile(name: string) {
+    return files.get(name) ?? pinnedFiles.get(name);
+  }
 
   /**
    * Read authored or pinned declarations without host filesystem access.
    * @param name The virtual filename requested by the compiler.
    */
   function readFile(name: string) {
-    return files.get(name)?.content ?? libraries[name];
+    return virtualFile(name)?.content;
   }
 
   const host: ts.CompilerHost = {
@@ -108,7 +121,7 @@ export function checkRecipeTypes(sources: readonly RecipeTypeFile[], limit: numb
      * Check whether the virtual files include this path.
      * @param name The virtual filename to check for availability.
      */
-    fileExists: (name) => files.has(name) || Object.hasOwn(libraries, name),
+    fileExists: (name) => files.has(name) || pinnedFiles.has(name),
     readFile,
     /**
      * Resolve permitted imports against the recipe's virtual files and pinned declarations.
@@ -139,9 +152,9 @@ export function checkRecipeTypes(sources: readonly RecipeTypeFile[], limit: numb
   return diagnostics.slice(0, limit).map((entry) => {
     let location = "recipe";
     if (entry.file && entry.start !== undefined) {
-      const part = files.get(entry.file.fileName)?.part;
+      const { label } = virtualFile(entry.file.fileName)!;
       const { line, character } = entry.file.getLineAndCharacterOfPosition(entry.start);
-      location = `${part ?? entry.file.fileName}:${line + 1}:${character + 1}`;
+      location = `${label}:${line + 1}:${character + 1}`;
     }
     const detail = ts.flattenDiagnosticMessageText(entry.messageText, host.getNewLine());
     return `${location} ${detail} (TS${entry.code})`;

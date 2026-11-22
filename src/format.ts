@@ -20,6 +20,7 @@ import { bundledRules, type Policy } from "./code-policy";
 import { normalizeStyles } from "./quality/css";
 import { defaultRecipeNames, virtualFiles } from "./quality/recipe-rules.js";
 import { checkRecipeTypes, type RecipeTypeFile } from "./quality/recipe-types";
+import { describeRecipeDiagnostic, recipeErrorMessage } from "./quality/recipe-diagnostics";
 import { spaceDeclarations } from "./quality/declaration-spacing.js";
 
 export const parts = [
@@ -102,6 +103,7 @@ function limitDiagnostics(messages: readonly string[]) {
  * @param policy The effective lint and formatting policy for the revision.
  * @param requestedNames Optional filename overrides for the submitted parts.
  * @param inheritedNames Previous filenames, used when an override is omitted.
+ * @throws {Error} When a file fails parsing, size limits or an enabled blocking quality check.
  */
 export async function normalizeFiles(
   value: unknown,
@@ -131,13 +133,7 @@ export async function normalizeFiles(
     throw new Error("Provide at least one non-empty recipe part.");
   }
   const fileNames = recipeFileNames(requestedNames, recipeParts, inheritedNames);
-  const hasTypeScript = recipeParts.some((part) => Object.hasOwn(virtualFiles, part));
-  const linter = hasTypeScript ? new Linter({ configType: "eslintrc" }) : null;
-  if (linter) {
-    for (const [name, rule] of Object.entries(bundledRules)) {
-      linter.defineRule(name, rule);
-    }
-  }
+  let linter: Linter | undefined;
   for (const { part: key, content } of recipeFiles) {
     if (key === "documentation" || key === "instructions") {
       result[key] = content.replace(/\r\n?/g, "\n").trimEnd() + "\n";
@@ -159,12 +155,10 @@ export async function normalizeFiles(
           }
         }
       } catch (error) {
-        const {
-          line = 1,
-          column = 1,
-          message,
-        } = error as Error & { line?: number; column?: number };
-        throw new Error(`styles:${line}:${column} ${message} (css-syntax)`);
+        const position = error as { line?: number; column?: number } | null | undefined;
+        throw new Error(
+          describeRecipeDiagnostic(key, recipeErrorMessage(error), position, "css-syntax"),
+        );
       }
       continue;
     }
@@ -191,14 +185,11 @@ export async function normalizeFiles(
               options: Parameters<typeof typescript.parsers.typescript.parse>[1],
             ) {
               const parsed = await typescript.parsers.typescript.parse(text, options);
-              hasFormatIgnore =
-                parsed.comments?.some(
-                  (comment: { value: string }) => comment.value.trim() === "prettier-ignore",
-                ) ?? false;
-              if (Object.keys(rules).length) {
-                ast = structuredClone(parsed);
-                lintText = text;
-              }
+              hasFormatIgnore = parsed.comments.some(
+                (comment: { value: string }) => comment.value.trim() === "prettier-ignore",
+              );
+              ast = structuredClone(parsed);
+              lintText = text;
               return parsed;
             },
           },
@@ -222,62 +213,70 @@ export async function normalizeFiles(
         ],
       });
     } catch (error) {
-      const { loc, message } = error as Error & {
-        loc?: { start?: { line: number; column: number } };
-      };
+      const failure = error as
+        | {
+            loc?: { start?: { line?: number; column?: number } };
+          }
+        | null
+        | undefined;
       throw new Error(
-        `${key}:${loc?.start?.line ?? 1}:${loc?.start?.column ?? 1} ${message.split("\n")[0]} (parse)`,
+        describeRecipeDiagnostic(
+          key,
+          recipeErrorMessage(error).split("\n")[0],
+          failure?.loc?.start,
+        ),
       );
     }
     if (hasFormatIgnore) {
       throw new Error(`${key} contains a prettier-ignore directive.`);
     }
-    if (ast && linter) {
-      // The legacy API runs rules with options validated by Code Cookbook
-      // without compiling schemas with dynamic code generation in the Worker.
-      const lintAst = ast;
-      linter.defineParser("cookbook-typescript", {
-        /** Pass the captured syntax and scope information to ESLint. */
-        parseForESLint() {
-          return {
-            ast: lintAst,
-            visitorKeys: visitorKeys as unknown as SourceCode.VisitorKeys,
-            scopeManager: analyze(lintAst, {
-              sourceType: "module",
-            }) as unknown as ESLintConfig.ESLintParseResult["scopeManager"],
-          };
-        },
-      });
-      const messages: {
-        severity: number;
-        line?: number;
-        column?: number;
-        message: string;
-        ruleId: string | null;
-      }[] = linter.verify(
-        lintText,
-        {
-          parser: "cookbook-typescript",
-          env: { es2022: true },
-          rules,
-          globals: policy.globals,
-          settings: {
-            ...policy.settings,
-            cookbookParts: recipeParts,
-            cookbookFileNames: fileNames,
-          },
-        },
-        { filename, allowInlineConfig: false },
-      );
-      /**
-       * Format a lint diagnostic with its recipe part and location.
-       * @param message The lint finding emitted for the current part.
-       */
-      const describe = (message: (typeof messages)[number]) =>
-        `${key}:${message.line}:${message.column} ${message.message} (${message.ruleId ?? "parse"})`;
-      for (const message of messages) {
-        (message.severity === 2 ? errors : warnings).push(describe(message));
+    if (!linter) {
+      linter = new Linter({ configType: "eslintrc" });
+      for (const [name, rule] of Object.entries(bundledRules)) {
+        linter.defineRule(name, rule);
       }
+    }
+    // The legacy API runs rules with options validated by Code Cookbook
+    // without compiling schemas with dynamic code generation in the Worker.
+    // Every nonblank code part is parsed, and validated policies always require JSDoc.
+    const lintAst = ast!;
+    linter.defineParser("cookbook-typescript", {
+      /** Pass the captured syntax and scope information to ESLint. */
+      parseForESLint() {
+        return {
+          ast: lintAst,
+          visitorKeys: visitorKeys as unknown as SourceCode.VisitorKeys,
+          scopeManager: analyze(lintAst, {
+            sourceType: "module",
+          }) as unknown as ESLintConfig.ESLintParseResult["scopeManager"],
+        };
+      },
+    });
+    const messages: {
+      severity: number;
+      line?: number;
+      column?: number;
+      message: string;
+      ruleId: string | null;
+    }[] = linter.verify(
+      lintText,
+      {
+        parser: "cookbook-typescript",
+        env: { es2022: true },
+        rules,
+        globals: policy.globals,
+        settings: {
+          ...policy.settings,
+          cookbookParts: recipeParts,
+          cookbookFileNames: fileNames,
+        },
+      },
+      { filename, allowInlineConfig: false },
+    );
+    for (const message of messages) {
+      (message.severity === 2 ? errors : warnings).push(
+        describeRecipeDiagnostic(key, message.message, message, message.ruleId),
+      );
     }
     const spaced = blankLinesBetweenDeclarations
       ? spaceDeclarations(formatted, filename)
@@ -287,7 +286,7 @@ export async function normalizeFiles(
     }
     result[key as Part] = spaced;
   }
-  if (hasTypeScript && policy.quality.typeCheck !== "off" && errors.length === 0) {
+  if (linter && policy.quality.typeCheck !== "off" && errors.length === 0) {
     const target = policy.quality.typeCheck === "error" ? errors : warnings;
     target.push(...checkRecipeTypes(sources, 20));
   }
