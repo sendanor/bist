@@ -1159,6 +1159,12 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   form.requestSubmit();
   await eventually(() => byline()?.querySelector(".state-quarantined"), "quarantine shown");
   assert.equal((await dispatch("/api/recipe?" + query, "reader")).status, 404);
+  const quarantineActions = document.querySelector(".revision-trigger");
+  quarantineActions.click();
+  const quarantineMenu = document.querySelector(".revision-menu");
+  assert.match(quarantineMenu.textContent, /Re-run LLM review/u);
+  assert.doesNotMatch(quarantineMenu.textContent, /Propose an improvement/u);
+  quarantineActions.click();
   const quarantined = window.location.pathname;
   window.history.pushState(null, "", "/edit/" + draft.slug + "/" + draft.revision);
   window.dispatchEvent(new window.PopStateEvent("popstate"));

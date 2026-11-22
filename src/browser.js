@@ -1665,10 +1665,8 @@ function showRevisionAction(choice, submit, trigger) {
  * @param recheck Optional action that checks the displayed edit in place.
  */
 function revisionControls(recipe, section, recheck) {
+  // Readers can propose an improvement. Only maintainers can see quarantined revisions.
   const choices = revisionChoices(recipe, recheck);
-  if (!choices.length) {
-    return null;
-  }
   const trigger = el(
     "button",
     {
