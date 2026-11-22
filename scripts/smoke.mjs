@@ -2,10 +2,12 @@ import { repositoryRecipe } from "./repository-recipes.mjs";
 import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
 import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
 import {
+  assertAgentAdvice,
   correctedReadme,
   expectMcpWarnings,
   submitOverMcp,
   verifyMcpAcknowledgement,
+  verifyMcpRepairs,
 } from "../tests/mcp-submission-warnings.mjs";
 import {
   recheckCriterion,
@@ -329,7 +331,18 @@ try {
   const catalog = (await (await dispatch("/mcp", "author", listMcp)).json()).result.tools;
   const submitDefinition = catalog.find(({ name }) => name === "submit_recipe");
   assert.equal(submitDefinition.inputSchema.properties.reviewReceipt.type, "string");
-  assert.match(submitDefinition.description, /ask whether to fix/u);
+  assertAgentAdvice(
+    submitDefinition.description,
+    /fix actionable warnings and validation errors yourself/iu,
+  );
+  assertAgentAdvice(
+    submitDefinition.inputSchema.properties.reviewReceipt.description,
+    /omit when submitting corrections/iu,
+  );
+  assertAgentAdvice(
+    submitDefinition.inputSchema.properties.allowDuplicates.description,
+    /resolve unintended duplication first/iu,
+  );
   assert.equal((await dispatch("/assistant", null)).status, 200);
   assert.equal((await dispatch("/api/assistant", null)).status, 401);
   assert.equal(
@@ -662,6 +675,16 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   assert.equal(blocking.code, undefined);
   assert.match(blocking.error, /same agent instructions/);
   assert.doesNotMatch(blocking.error, /same code/);
+  const duplicateBlock = await submitOverMcp(dispatch, {
+    ...payload,
+    slug: "policy-mcp-duplicate-blocked",
+    files: units,
+    allowDuplicates: true,
+  });
+  assert.equal(duplicateBlock.isError, true);
+  assertAgentAdvice(duplicateBlock.structuredContent.guidance, /resolve the reported conflict/iu);
+  assert.match(duplicateBlock.content[0].text, /same agent instructions/u);
+  assert.doesNotMatch(duplicateBlock.content[0].text, /allowDuplicates|reviewReceipt/u);
   assert.equal((await setDuplicates("warn", "off")).status, 200);
   const warnedMcp = await dispatch("/mcp", "author", {
     jsonrpc: "2.0",
@@ -674,7 +697,12 @@ export declare function chunk<T>(items:readonly T[],size:number):T[][];`,
   });
   const warnedMcpResult = (await warnedMcp.json()).result;
   assert.equal(warnedMcpResult.structuredContent.code, "duplicate_warning");
-  assert.match(warnedMcpResult.content[0].text, /allowDuplicates/);
+  assertAgentAdvice(
+    warnedMcpResult.structuredContent.guidance,
+    /^Reuse .*unintended duplication/iu,
+  );
+  assert.match(warnedMcpResult.structuredContent.guidance, /intentional.*allowDuplicates/u);
+  assert.ok(warnedMcpResult.content[0].text.includes(warnedMcpResult.structuredContent.guidance));
   assert.equal((await setDuplicates("off", "off")).status, 200);
   assert.equal((await submitPolicyExample("policy-duplicate-off")).status, 201);
   assert.equal((await dispatch("/api/settings", "maintainer", settings.policy)).status, 200);
@@ -945,6 +973,9 @@ describe("hasFields", () => {
   const rejected = (await blocked.json()).result;
   assert.equal(rejected.isError, true);
   assert.match(rejected.content[0].text, /source:2:1.*no-console/);
+  assertAgentAdvice(rejected.structuredContent.guidance, /^Fix .*resubmit/iu);
+  assert.ok(rejected.content[0].text.includes(rejected.structuredContent.guidance));
+  assert.equal(rejected.structuredContent.reviewReceipt, undefined);
   assert.equal(
     (
       await dispatch("/api/settings", "maintainer", {
@@ -960,6 +991,17 @@ describe("hasFields", () => {
     files: { source: "unknownSymbol();" },
   });
   assert.match(warned.warnings[0], /no-undef/);
+  assertAgentAdvice(warned.guidance, /pending review.*replace.*editVersion/u);
+  const repairedDraft = await tool("submit_recipe", {
+    ...payload,
+    slug: warned.slug,
+    replace: warned.id,
+    editVersion: warned.editVersion,
+    files: { source: "export const warningCorrection = 1;" },
+  });
+  assert.equal(repairedDraft.id, warned.id);
+  assert.equal(repairedDraft.editVersion, warned.editVersion + 1);
+  assert.equal(repairedDraft.guidance, undefined);
   const clean = await tool("submit_recipe", {
     ...payload,
     slug: "policy-example",
@@ -1892,6 +1934,7 @@ describe("hasFields", () => {
     { slug: "paging-fixture-26", revision: sampleIds.at(-1) },
     () => llmReviewCalls,
   );
+  await verifyMcpRepairs(dispatch, checkedRecipe, llmRule);
   assert.equal(
     (await dispatch(llmReviewPath, "maintainer", { ...llmRule, enabled: false })).status,
     200,

@@ -22,6 +22,19 @@ export async function submitOverMcp(dispatch, submission, actor = "author") {
 }
 
 /**
+ * Require actionable agent instructions and reject the former human-confirmation gate.
+ * @param advice The instructions advertised in discovery or returned after a submission.
+ * @param action Expected primary action for this particular finding.
+ */
+export function assertAgentAdvice(advice, action) {
+  assert.match(advice, action);
+  assert.doesNotMatch(
+    advice,
+    /ask (?:whether|the user)|wait for their|only (?:with approval|after the user)|explicitly approve/iu,
+  );
+}
+
+/**
  * Require every warning and its acknowledgement receipt in both MCP result formats.
  * @param dispatch Local Worker request helper.
  * @param submission Snapshot for which the server must pause before storage.
@@ -40,8 +53,54 @@ export async function expectMcpWarnings(dispatch, submission, warnings, actor = 
     assert.ok(text.includes(part + ": " + reason));
   }
   assert.ok(text.includes(JSON.stringify({ reviewReceipt })));
-  assert.match(text, /explicitly approve/u);
+  const { guidance } = result.structuredContent;
+  assertAgentAdvice(guidance, /^Fix .*resubmit .*corrected snapshot/iu);
+  assert.match(guidance, /omit reviewReceipt when correcting/iu);
+  assert.match(guidance, /deliberately retain all remaining warnings/iu);
+  assert.ok(text.includes(guidance));
   return reviewReceipt;
+}
+
+/**
+ * Submit corrections to both advisory and blocking LLM findings using ordinary MCP calls.
+ * @param dispatch Authenticated transport to the local Worker.
+ * @param submission Recipe whose initial documentation fails the fixture's review rule.
+ * @param policy Review configuration that accepts the corrected README.
+ */
+export async function verifyMcpRepairs(dispatch, submission, policy) {
+  const settings = "/api/settings/llm-review";
+  const previous = await (await dispatch(settings, "maintainer")).json();
+  try {
+    for (const mode of ["warn", "error"]) {
+      const rule = { ...policy.rules.documentation, mode };
+      assert.equal(
+        (await dispatch(settings, "maintainer", { ...policy, rules: { documentation: rule } }))
+          .status,
+        200,
+      );
+      const actor = "repair-" + mode;
+      const draft = { ...submission, slug: actor };
+      const rejected = await submitOverMcp(dispatch, draft, actor);
+      assert.equal(rejected.isError, true);
+      assert.equal(Boolean(rejected.structuredContent.reviewReceipt), mode === "warn");
+      assertAgentAdvice(rejected.structuredContent.guidance, /^Fix .*resubmit/iu);
+      assert.ok(rejected.content[0].text.includes(rejected.structuredContent.guidance));
+      const repaired = await submitOverMcp(
+        dispatch,
+        { ...draft, files: { documentation: correctedReadme } },
+        actor,
+      );
+      assert.equal(repaired.isError, undefined, repaired.content[0].text);
+      const revision = JSON.parse(repaired.content[0].text);
+      const target = new URLSearchParams({ slug: draft.slug, revision: revision.id });
+      const stored = await (await dispatch("/api/recipe?" + target, actor)).json();
+      assert.equal(stored.state, "pending");
+      assert.equal(stored.files.documentation.trimEnd(), correctedReadme);
+      assert.equal(stored.llmWarnings, undefined);
+    }
+  } finally {
+    assert.equal((await dispatch(settings, "maintainer", previous)).status, 200);
+  }
 }
 
 /**

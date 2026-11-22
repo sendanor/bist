@@ -114,6 +114,8 @@ const tool = (name: string, description: string, properties: Input, required: st
   description,
   inputSchema: { type: "object", properties, required, additionalProperties: false },
 });
+const correctSubmission =
+  "Fix actionable warnings and validation errors yourself, then resubmit the complete corrected snapshot.";
 const tools = [
   tool(
     "search_recipes",
@@ -136,7 +138,9 @@ const tools = [
   ),
   tool(
     "submit_recipe",
-    "Submit one complete recipe snapshot for human review. Use base for a new revision, or replace and editVersion to update your draft. Include all parts to keep. Any part can stand alone. On llm_warning, show the user every finding and ask whether to fix the files or submit with the warnings. Wait for their choice before retrying.",
+    "Submit a complete recipe snapshot for maintainer review. Use base for a new revision, or replace and editVersion to update your draft. Include all parts to keep. Any part can stand alone. " +
+      correctSubmission +
+      " Acknowledge only advisory findings you deliberately retain.",
     {
       slug: string,
       title: string,
@@ -147,13 +151,14 @@ const tools = [
       editVersion: { type: "integer", minimum: 0 },
       allowDuplicates: {
         type: "boolean",
-        description: "Acknowledge duplicate warnings. Cannot override an error.",
+        description:
+          "Reuse the existing recipe or resolve unintended duplication first. Set true on a retry only for an intentional duplicate warning.",
       },
       reviewReceipt: {
         type: "string",
         maxLength: 36,
         description:
-          "Only after the user explicitly accepts the displayed LLM warnings, return this receipt with the same submission. Omit it when sending corrections.",
+          "Omit when submitting corrections. To retain assessed LLM warnings for maintainer review, retry the unchanged snapshot with the receipt returned by llm_warning.",
       },
       files: {
         type: "object",
@@ -288,6 +293,36 @@ async function currentMcpTools(db: Database) {
 }
 
 /**
+ * Tell an MCP submitter how to fix the draft or retain an intentional advisory finding.
+ * @param error A submission validation failure, revision conflict or acknowledgeable warning.
+ */
+function submissionFeedback(error: RequestError) {
+  let guidance = correctSubmission;
+  if (error.code === "llm_warning") {
+    guidance +=
+      " Omit reviewReceipt when correcting files. If you deliberately retain all remaining warnings for maintainer review, retry the unchanged snapshot with " +
+      JSON.stringify({ reviewReceipt: error.receipt }) +
+      ".";
+  } else if (error.code === "duplicate_warning") {
+    guidance =
+      "Reuse the existing recipe or remove the unintended duplication. If the duplicate is intentional, retry the same snapshot with allowDuplicates set to true.";
+  } else if (error.status === 409) {
+    guidance = "Resolve the reported conflict before resubmitting.";
+  }
+  return {
+    isError: true,
+    content: [{ type: "text", text: error.message + "\n" + guidance }],
+    structuredContent: {
+      error: error.message,
+      guidance,
+      code: error.code,
+      warnings: error.warnings,
+      reviewReceipt: error.receipt,
+    },
+  };
+}
+
+/**
  * Handle a JSON-RPC request against the MCP recipe tools.
  * @param request The incoming MCP HTTP request.
  * @param cookbook The recipe service for the caller, or null when signed out.
@@ -361,11 +396,26 @@ async function mcp(request: Request, cookbook: Cookbook | null, env: Env) {
       case "get_recipe":
         value = await cookbook.get(input);
         break;
-      case "submit_recipe":
-        value = await cookbook.submit(input, (candidate) =>
-          reviewSubmission(db, env.SETTINGS_ENCRYPTION_KEY, candidate),
-        );
+      case "submit_recipe": {
+        try {
+          const saved = await cookbook.submit(input, (candidate) =>
+            reviewSubmission(db, env.SETTINGS_ENCRYPTION_KEY, candidate),
+          );
+          value = saved.warnings?.length
+            ? {
+                ...saved,
+                guidance:
+                  "This draft is pending review. Fix actionable warnings by resubmitting the complete corrected snapshot with this id as replace and the returned editVersion.",
+              }
+            : saved;
+        } catch (error) {
+          if (error instanceof RequestError && [400, 409, 422].includes(error.status)) {
+            return result(submissionFeedback(error));
+          }
+          throw error;
+        }
         break;
+      }
       case "my_revisions":
         value = await cookbook.queue(input, true);
         break;
@@ -377,41 +427,7 @@ async function mcp(request: Request, cookbook: Cookbook | null, env: Env) {
     }
     return result({ content: [{ type: "text", text: JSON.stringify(value) }] });
   } catch (error) {
-    const detail = message(error);
-    if (error instanceof RequestError && error.code === "duplicate_warning") {
-      return result({
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: detail + " If appropriate, retry with allowDuplicates set to true.",
-          },
-        ],
-        structuredContent: { code: error.code, error: detail },
-      });
-    }
-    if (error instanceof RequestError && error.code === "llm_warning") {
-      return result({
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text:
-              detail +
-              "\nShow these warnings to the user. Ask them to correct the files or explicitly approve submitting with all warnings. Wait for their decision. For corrections, omit the receipt. Only with approval, retry the same submit_recipe call with " +
-              JSON.stringify({ reviewReceipt: error.receipt }) +
-              ".",
-          },
-        ],
-        structuredContent: {
-          code: error.code,
-          error: detail,
-          warnings: error.warnings,
-          reviewReceipt: error.receipt,
-        },
-      });
-    }
-    return result({ isError: true, content: [{ type: "text", text: detail }] });
+    return result({ isError: true, content: [{ type: "text", text: message(error) }] });
   }
 }
 
