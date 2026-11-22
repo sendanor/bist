@@ -364,11 +364,43 @@ async function verifyReviewerComments(window) {
   const section = window.document.querySelector(
     'section[aria-labelledby="recipe-part-title-documentation"]',
   );
-  section.querySelector('button[aria-label="Comment on file"]').click();
+  const open = section.querySelector('button[aria-label="Comment on file"]');
+  open.click();
   const wholeFile = section.querySelector(".review-comment-form");
-  wholeFile.elements.body.value = "Browser fixture whole-file feedback.";
+  open.click();
+  assert.equal(section.querySelectorAll(".review-comment-form").length, 1);
+  assert.equal(window.document.activeElement, wholeFile.elements.body);
+  wholeFile.elements.body.value = "  ";
   wholeFile.requestSubmit();
-  await eventually(() => !wholeFile.isConnected, "whole-file comment saved");
+  assert.equal(wholeFile.elements.body.value, "");
+  clickText(wholeFile, "button", "Cancel");
+  assert.equal(wholeFile.isConnected, false);
+  open.click();
+  const replacement = section.querySelector(".review-comment-form");
+  const fetch = window.fetch;
+  /**
+   * Exercise the comment composer after one temporary save failure.
+   * @param path API resource requested by the reviewer.
+   * @param options Original comment request.
+   */
+  window.fetch = (path, options) =>
+    path === "/api/comment"
+      ? Promise.resolve(Response.json({ error: "Fixture comment save delayed." }, { status: 503 }))
+      : fetch(path, options);
+  try {
+    replacement.elements.body.value = "Browser fixture whole-file feedback.";
+    replacement.requestSubmit();
+    await eventually(
+      () =>
+        replacement.querySelector('[role="alert"]').textContent === "Fixture comment save delayed.",
+      "failed comment preserved",
+    );
+    assert.equal(replacement.elements.body.value, "Browser fixture whole-file feedback.");
+  } finally {
+    window.fetch = fetch;
+  }
+  replacement.requestSubmit();
+  await eventually(() => !replacement.isConnected, "whole-file comment saved");
   assert.match(section.textContent, /Browser fixture whole-file feedback/u);
   section.querySelector('button[aria-label="Markdown source"]').click();
   const line = section.querySelector('button[aria-label="Comment on line 1"]');
@@ -395,6 +427,7 @@ async function verifyRecheckFeedback(window) {
     },
     { checkedParts: [], warnings: [] },
   ];
+  const pending = Promise.withResolvers();
   /**
    * Replay recheck responses while forwarding ordinary API calls unchanged.
    * @param path API resource requested by the browser.
@@ -405,6 +438,9 @@ async function verifyRecheckFeedback(window) {
       return fetch(path, options);
     }
     const report = reports.shift();
+    if (reports.length === 1) {
+      return pending.promise;
+    }
     return Promise.resolve(Response.json({ ...report, savedWarnings: report.warnings }));
   };
   try {
@@ -415,6 +451,19 @@ async function verifyRecheckFeedback(window) {
     for (const pattern of [/Review warnings appear/u, /None of this revision/u]) {
       document.querySelector(".revision-trigger").click();
       clickText(document.querySelector(".revision-menu"), "button", "Re-run LLM review");
+      if (reports.length === 1) {
+        document.querySelector(".revision-trigger").click();
+        clickText(document.querySelector(".revision-menu"), "button", "Re-run LLM review");
+        assert.equal(reports.length, 1, "second click must not start another check");
+        const findings = [{ part: "documentation", reason: "Describe the input." }];
+        pending.resolve(
+          Response.json({
+            checkedParts: ["documentation"],
+            warnings: findings,
+            savedWarnings: findings,
+          }),
+        );
+      }
       await eventually(() => pattern.test(recheck.textContent), "recheck summary updated");
       const warning = docs.querySelector(".file-warnings");
       assert.equal(warning.hidden, reports.length === 0);
@@ -868,6 +917,7 @@ async function verifyEditorRecovery(window) {
   const failedSave = Promise.withResolvers();
   const signals = [];
   let saves = 0;
+  const receipt = "00000000-0000-4000-8000-000000000010";
   /**
    * Delay responses so intermediate editor states and concurrency can be asserted.
    * @param path API resource being requested.
@@ -883,14 +933,31 @@ async function verifyEditorRecovery(window) {
     }
     if (path === "/api/recipe/file") {
       saves++;
-      return saves === 1
-        ? failedSave.promise
-        : Promise.resolve(
-            Response.json(
-              { error: "Duplicate recipe fixture.", code: "duplicate_warning" },
-              { status: 409 },
-            ),
-          );
+      if (saves === 1) {
+        return failedSave.promise;
+      }
+      if (saves === 2) {
+        return Promise.resolve(
+          Response.json(
+            { error: "Duplicate recipe fixture.", code: "duplicate_warning" },
+            { status: 409 },
+          ),
+        );
+      }
+      const submitted = JSON.parse(options.body);
+      if (!submitted.reviewReceipt) {
+        return Promise.resolve(
+          Response.json(
+            {
+              error: "Fixture: explain the expected output.",
+              code: "llm_warning",
+              reviewReceipt: receipt,
+            },
+            { status: 409 },
+          ),
+        );
+      }
+      assert.equal(submitted.reviewReceipt, receipt);
     }
     return fetch(path, options);
   };
@@ -956,11 +1023,58 @@ async function verifyEditorRecovery(window) {
     await eventually(() => !save.disabled, "cancelled submission returns to the editor");
     assert.equal(input.value, manual);
     assert.equal(dialog.dispatchEvent(new window.Event("cancel", { cancelable: true })), true);
-    clickText(dialog, "button", "Cancel");
-    await eventually(() => !dialog.isConnected, "dismissed editor after save conflict");
+    const warningSelector = 'dialog[aria-labelledby="submission-warning-heading"]';
+    save.click();
+    await eventually(
+      () => document.querySelector(warningSelector)?.textContent.includes("expected output"),
+      "received LLM review warning",
+    );
+    clickText(document.querySelector(warningSelector), "button", "Cancel");
+    await eventually(() => !save.disabled, "declined LLM warning and kept text");
+    assert.equal(input.value, manual);
+    save.click();
+    await eventually(
+      () => Boolean(document.querySelector(warningSelector)),
+      "warning presented again",
+    );
+    clickText(document.querySelector(warningSelector), "button", "Submit anyway");
+    await eventually(
+      () =>
+        !dialog.isConnected &&
+        document
+          .querySelector("#recipe-part-content-documentation")
+          ?.textContent.includes("Preserve this newer working copy."),
+      "approved warning carried on successful retry",
+    );
   } finally {
     window.fetch = fetch;
   }
+}
+
+/**
+ * Remove a disposable draft from the author view and verify the server no longer exposes it.
+ * @param window Browser with the test draft open.
+ * @param dispatch Integration transport for checking the removed revision.
+ */
+async function verifyAuthorRemoval(window, dispatch) {
+  const { document } = window;
+  const [, , , slug, revision] = window.location.pathname.split("/");
+  document.querySelector(".revision-trigger").click();
+  document
+    .querySelector(".revision-controls")
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(document.querySelector(".revision-menu").hidden, true);
+  document.querySelector(".revision-trigger").click();
+  clickText(document.querySelector(".revision-menu"), "button", "Remove draft");
+  document.querySelector("dialog form").requestSubmit();
+  await eventually(
+    () =>
+      window.location.pathname === "/mine" &&
+      document.querySelector("#view h1")?.textContent === "My revisions",
+    "returned to the author's list",
+  );
+  const params = new URLSearchParams({ slug, revision });
+  assert.equal((await dispatch("/api/recipe?" + params, "browser-author")).status, 404);
 }
 
 /**
@@ -992,6 +1106,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
     await verifyDocumentDisplay(author);
     await verifyDraftEditor(author);
     await verifyEditorRecovery(author);
+    await verifyAuthorRemoval(author, dispatch);
     assert.ok(author.__coverage__["src/file-editor.js"]);
     await writeFile(join(directory, "browser-author.json"), JSON.stringify(author.__coverage__));
   } finally {
