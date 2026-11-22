@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Linter } from "eslint";
 import parser from "@typescript-eslint/parser";
 import { qualityRules } from "../src/quality/rules.js";
-import { recipeRules } from "../src/quality/recipe-rules.js";
+import { recipeRules, resolveRecipePart } from "../src/quality/recipe-rules.js";
 import { findDuplicates } from "../src/quality/duplicates.js";
 import { secretKinds } from "../scripts/secret-patterns.mjs";
 import { assertPublicBundle } from "../scripts/public-bundle.mjs";
@@ -176,6 +176,11 @@ const cases = [
   ["recipe-imports", "import { useState } from 'react';", /allowlist/i],
   ["recipe-imports", "import { useState } from 'react';", undefined, [{ external: ["react"] }]],
   ["recipe-imports", "export { example } from './source.js';", undefined, [], "tests.tsx"],
+  ["recipe-imports", "import { own } from './source';", /cannot import itself/i],
+  ["recipe-imports", "type Value = import('./interface').Value;", /missing/i],
+  ["recipe-imports", "import contract = require('./interface.js');", /missing/i],
+  ["recipe-imports", "export * from 'react';", /allowlist/i],
+  ["recipe-imports", "const optional = require();", /literal module path/i],
 ];
 
 for (const [rule, input, expected, options, filename] of cases) {
@@ -199,6 +204,17 @@ test("size counts only code lines and allows a scoped exception", () => {
   assert.deepEqual(check("function-size", `function f() {\n${boilerplate}}`), []);
   assert.match(check("function-size", `function f() {\n${big}}`)[0].message, /103 code lines/);
   assert.match(check("file-size", big.repeat(5))[0].message, /505 code lines/);
+});
+
+test("custom recipe filenames resolve ESM and CommonJS aliases without choosing an ambiguous stem", () => {
+  const names = { source: "entry.mts", tests: "entry.cts", interface: "contract.d.ts" };
+  assert.equal(resolveRecipePart("./entry.mts", names), "source");
+  assert.equal(resolveRecipePart("./entry.mjs", names), "source");
+  assert.equal(resolveRecipePart("./entry.cjs", names), "tests");
+  assert.equal(resolveRecipePart("./contract.js", names), "interface");
+  assert.equal(resolveRecipePart("./entry", names), undefined);
+  assert.equal(resolveRecipePart("./source.js", names), undefined);
+  assert.equal(resolveRecipePart("./source.js"), "source");
 });
 
 test("duplication requires 80 tokens on at least 12 lines and does not match overlapping runs", () => {

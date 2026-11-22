@@ -214,11 +214,125 @@ async function verifyRecipeValidation(dispatch) {
 }
 
 /**
- * Test the public Worker boundary with invalid and oversized inputs before integration fixtures run.
- * @param dispatch Request transport bound to the local instance.
+ * Verify that invalid stored values surface a controlled error and can be read after repair.
+ * @param dispatch Request transport to the disposable Worker.
+ * @param db Local D1 binding containing only integration fixtures.
  */
-export async function verifyWorkerValidation(dispatch) {
+async function verifyStoredData(dispatch, db) {
+  const recipe = {
+    slug: "stored-data-fixture",
+    title: "Stored recipe validation",
+    summary: "Verify the API response when legacy storage contains an invalid value.",
+    files: {
+      documentation: "# Validate stored recipe data\n\nRestore valid values before reopening.",
+    },
+  };
+  const created = await dispatch("/api/submit", "author", recipe);
+  assert.equal(created.status, 201);
+  const saved = await created.json();
+  const target = { slug: recipe.slug, revision: saved.id, editVersion: saved.editVersion };
+  const detail = "/api/recipe?" + new URLSearchParams(target);
+  await expectError(
+    dispatch,
+    "/api/recipe/file",
+    "author",
+    { ...target, part: "documentation", content: "   " },
+    400,
+    /Enter file contents/u,
+  );
+  for (const [action, detail] of [
+    ["request_changes", /Explain the requested changes/u],
+    ["quarantine", /Give a quarantine reason/u],
+    ["request_removal", /Give a removal reason/u],
+    ["unknown", /Unknown action/u],
+  ]) {
+    await expectError(dispatch, "/api/action", "maintainer", { ...target, action }, 400, detail);
+  }
+  const nonexistent = "00000000-0000-4000-8000-000000000003";
+  await expectError(
+    dispatch,
+    "/api/comment",
+    "maintainer",
+    { ...target, revision: nonexistent, part: "documentation", body: "Review comment" },
+    404,
+    /Recipe revision not found/u,
+  );
+  await expectError(
+    dispatch,
+    "/api/submit",
+    "author",
+    { ...recipe, base: nonexistent, files: { documentation: "Missing base validation." } },
+    409,
+    /Choose an accessible base revision/u,
+  );
+  const record = await db
+    .prepare("SELECT tags, files, llm_warnings FROM revisions WHERE id = ?")
+    .bind(saved.id)
+    .first();
+  /**
+   * Update only the disposable fixture and preserve the untouched fields from its original row.
+   * @param fields Known synthetic values for each storage field being exercised.
+   */
+  const overwrite = (fields) =>
+    db
+      .prepare("UPDATE revisions SET tags = ?, files = ?, llm_warnings = ? WHERE id = ?")
+      .bind(fields.tags, fields.files, fields.llm_warnings, saved.id)
+      .run();
+  try {
+    for (const corrupt of [{ tags: "{}" }, { files: "[]" }, { files: '{"documentation":true}' }]) {
+      await overwrite({ ...record, ...corrupt });
+      const response = await dispatch(detail, "author");
+      assert.equal(response.status, 500);
+      assert.deepEqual(await response.json(), { error: "The operation failed. Please retry." });
+    }
+    await overwrite({ ...record, llm_warnings: "{}" });
+    const sanitized = await dispatch(detail, "author");
+    assert.equal(sanitized.status, 200);
+    assert.deepEqual((await sanitized.json()).llmWarnings, []);
+  } finally {
+    await overwrite(record);
+  }
+  assert.equal(
+    (await (await dispatch(detail, "author")).json()).files.documentation,
+    recipe.files.documentation + "\n",
+  );
+  const storedPolicy = await db
+    .prepare("SELECT policy FROM llm_review_settings WHERE id = 1")
+    .first();
+  try {
+    await db
+      .prepare(
+        "INSERT INTO llm_review_settings (id, policy) VALUES (1, '[]') ON CONFLICT(id) DO UPDATE SET policy = excluded.policy",
+      )
+      .run();
+    await expectError(
+      dispatch,
+      "/api/settings/llm-review",
+      "maintainer",
+      undefined,
+      503,
+      /saved LLM review policy is invalid/u,
+    );
+  } finally {
+    if (storedPolicy) {
+      await db
+        .prepare("UPDATE llm_review_settings SET policy = ? WHERE id = 1")
+        .bind(storedPolicy.policy)
+        .run();
+    } else {
+      await db.prepare("DELETE FROM llm_review_settings WHERE id = 1").run();
+    }
+  }
+}
+
+/**
+ * Test the public Worker boundary, including invalid input and malformed stored fixture values.
+ * @param dispatch Request transport bound to the local instance.
+ * @param db Disposable Worker database containing synthetic test records.
+ */
+export async function verifyWorkerValidation(dispatch, db) {
   await verifyProtocol(dispatch);
   await verifySettingsValidation(dispatch);
   await verifyRecipeValidation(dispatch);
+  await verifyStoredData(dispatch, db);
 }

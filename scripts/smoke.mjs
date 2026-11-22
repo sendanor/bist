@@ -2030,7 +2030,7 @@ describe("hasFields", () => {
   assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
   await verifyOfflineFileEditor(dispatch);
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
-  await verifyWorkerValidation(dispatch);
+  await verifyWorkerValidation(dispatch, await runtime.getD1Database("DB"));
   if (coverageOutput) {
     catalogModels.push("gpt-6.2-sol", "gpt-6-luna");
     const { exerciseBrowser } = await import("../tests/browser-coverage.mjs");
