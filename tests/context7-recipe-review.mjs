@@ -86,6 +86,19 @@ export async function verifyContext7RecipeReview(dispatch, db) {
     const revision = db.prepare("SELECT state FROM revisions WHERE slug = ?").bind(recipe.slug);
     assert.equal(await revision.first(), null);
     assert.equal((await dispatch(settings, "maintainer", policy)).status, 200);
+    await db
+      .prepare(
+        "CREATE TRIGGER skip_test_review_receipt BEFORE INSERT ON llm_review_receipts BEGIN SELECT RAISE(IGNORE); END",
+      )
+      .run();
+    try {
+      const lost = await dispatch("/api/submit", actor, recipe);
+      assert.equal(lost.status, 503);
+      assert.match((await lost.json()).error, /Could not save the LLM review/u);
+      assert.equal(await revision.first(), null);
+    } finally {
+      await db.prepare("DROP TRIGGER skip_test_review_receipt").run();
+    }
     const created = await dispatch("/api/submit", actor, recipe);
     assert.equal(created.status, 201);
     assert.deepEqual(await revision.first(), { state: "pending" });
