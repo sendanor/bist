@@ -1,33 +1,23 @@
 # Code Cookbook
 
-Code Cookbook, also called Bist, is a shared library for moving reusable code, ideas, architecture
-specifications, and agent instructions between ChatGPT chats and other AI tools. Save something
-you developed in a ChatGPT chat as a recipe, then retrieve it from Codex or another connected tool
-through the Model Context Protocol (MCP). You can also submit a recipe from another MCP client
-and bring it back into a ChatGPT chat.
+Bist is a shared library for reusing code, ideas, architecture specs, and agent instructions
+across ChatGPT, Codex, and other AI tools. Save work from a ChatGPT conversation as a recipe
+and reuse it in another tool through the Model Context Protocol (MCP). Other connected
+MCP clients can submit recipes for reuse in ChatGPT too.
 
-Bist helps you review and improve recipes before others reuse them. On submission, configurable
-deterministic checks cover formatting, lint, types, CSS, and duplicates. When enabled and
-configured, review through the OpenAI API checks new or changed content against your written
-criteria. Maintainers can compare revisions and leave private comments on whole files or
-individual lines, including in Markdown, before approving and publishing a revision.
-
-A recipe can include code, interfaces, and tests, or consist entirely of documentation or agent
-instructions. Find published recipes by keyword or tag in the browser or over MCP, and fetch
-only the parts you need.
+Bist runs configurable, deterministic checks for formatting, lint, types, CSS, and duplicates.
+Optional OpenAI API review checks new or changed content against your written rules.
+Maintainers compare revisions and leave private comments on files or lines, including Markdown,
+before approving and publishing.
 
 ![The isRecord recipe in Code Cookbook with the sidebar, toolbar, documentation, source, and tests.](docs/is-record.jpg)
 
-This README describes the source in the `develop` branch. Hosted instances may run an earlier
-version. Recipe tests are stored and checked as text. Run them in the project where you reuse
-the code.
+This guide covers the `develop` branch. Hosted instances may run an earlier version.
 
 ## Install a private instance with ChatGPT Sites
 
-If your ChatGPT account has access to Sites, you can deploy Bist from the public
-`sendanor/bist` GitHub repository and connect it as a private MCP plugin for ChatGPT and
-Codex in the ChatGPT desktop app. In ChatGPT on the web or in the desktop app, select
-`@Sites` and send a prompt like this. [ChatGPT Sites documentation](https://learn.chatgpt.com/docs/sites/creating-a-site)
+If your account has Sites access, select `@Sites` in ChatGPT on the web or in the desktop app.
+Send this prompt. [ChatGPT Sites documentation](https://learn.chatgpt.com/docs/sites/creating-a-site)
 
 ```text
 @Sites Deploy Bist (Code Cookbook) from the develop branch of
@@ -39,21 +29,19 @@ Publish with access limited to my account and MCP enabled. Give me the Site URL
 and help me install and connect its private Code Cookbook plugin for ChatGPT and Codex.
 ```
 
-After the Site owner publishes it, open the plugin card Sites provides. If needed, find
-**Code Cookbook** under **Plugins → Personal → Created by you**, then choose **Install**
-and **Connect** as prompted. In a new ChatGPT or Codex conversation, select the plugin and
-ask it to list your recipe revisions. An empty list is expected on a fresh instance.
+After publication, open the plugin card from Sites or find **Code Cookbook** under
+**Plugins → Personal → Created by you**. Choose **Install** and **Connect**.
+Select the plugin in a new ChatGPT or Codex conversation and ask it to list your recipe
+revisions. A fresh instance returns an empty list.
 [ChatGPT MCP installation guide](https://learn.chatgpt.com/docs/extend/mcp#3-publish-and-install)
 
-If Sites needs a local copy of the source, clone the repository using the command below
-and use the checkout as the source project in the ChatGPT desktop app.
+If Sites asks for local source, use the checkout below in the ChatGPT desktop app.
+To join an existing instance, open its URL and sign in with ChatGPT. The operator manages access.
 
 ## Try it locally
 
-You need Git, Bash, Node.js 24 with npm, and access to the npm registry. The local preview uses test
-data and a synthetic maintainer account. It needs no ChatGPT account or hosted database.
-
-Clone the repository and build the Worker from the repository root.
+You need Git, Bash, Node.js 24 with npm, and npm registry access. The local preview uses
+test data and a synthetic maintainer account. It needs no ChatGPT account or hosted database.
 
 ```sh
 git clone --branch develop https://github.com/sendanor/bist.git
@@ -62,89 +50,75 @@ npm ci
 npm run build
 ```
 
-Start the [local browser preview](docs/local-preview.md) and open `http://127.0.0.1:8787/`.
-In **Contribute**, select **Fill with example**, then **Submit for review**. The recipe opens
-with a **Pending review** status. You can approve and publish it from **Revision actions**
-using the preview account, then find **Batch items into chunks** in the recipe library.
-
-If you already have access to a hosted instance, open its URL and sign in with ChatGPT.
-The instance operator manages access.
+Follow the [local preview guide](docs/local-preview.md) and open `http://127.0.0.1:8787/`.
+In **Contribute**, select **Fill with example**, then **Submit for review**. The example opens as
+**Pending review**. Use **Revision actions** to approve and publish it. Then find **Batch items
+into chunks** in the library. The guide includes a [runnable MCP request](docs/local-preview.md#try-mcp).
 
 ## Use recipes
 
-A revision is one complete snapshot of a recipe. Use **Edit draft** to update your own
-unapproved revision in place. To improve an approved or published revision, create a new
-revision from it. Approval belongs to that specific revision, and publishing makes it the
-default version in search. For review comments and removal, see the
-[recipe workflow](docs/recipe-workflow.md).
+A recipe can contain code, interfaces, tests, CSS, documentation, or agent instructions.
+Documentation or instructions can stand alone. Bist stores and checks tests as text.
+Run them in the project where you reuse the code.
 
-MCP clients can use `search_recipes` to find a slug and `get_recipe` to retrieve a published
-revision or selected parts. The [recipe workflow](docs/recipe-workflow.md#use-mcp) describes the
-endpoint and submission fields. The [local preview](docs/local-preview.md#try-mcp) includes a
-runnable MCP request.
+Edit your own unapproved revision in place. Start a new revision to improve an approved or
+published one. Approval applies to one snapshot. Publishing sets the default version in search.
+See the [recipe workflow](docs/recipe-workflow.md) for review comments and removal.
+
+Find recipes by keyword or tag in the browser or with `search_recipes` over MCP.
+Use `get_recipe` to fetch a published revision or selected files.
+See [MCP tools and submission fields](docs/recipe-workflow.md#use-mcp).
 
 ## Configure an instance
 
-Maintainers configure formatting, lint, type, CSS, and duplicate checks in **Settings → Code policy**.
-See the [quality policy](QUALITY.md) for defaults, configurable checks, and supported inputs.
-
-On a fresh instance, connecting an OpenAI key and model enables submission review for all
-six file types. To customize the rules or opt out before connecting, open **Settings → LLM review**.
-See the [default review rules and severities](docs/recipe-workflow.md#configure-llm-review).
-
-The included hosting configuration targets ChatGPT Sites and uses a Cloudflare Worker with a
-D1 database binding named `DB`. To prepare an instance-specific configuration, copy
-[the example manifest](.openai/hosting.example.json) to `.openai/hosting.json` and set its
-`project_id` to your Sites project ID. The local manifest is ignored by Git. Configure
-`MAINTAINER_EMAILS` as a comma-separated list of verified ChatGPT email addresses in the
-hosted runtime. Apply the [D1 migrations](drizzle/) to the instance database. Keep deployment
-settings and credentials outside the public repository.
+- **Hosting.** Bist runs as a Cloudflare Worker on ChatGPT Sites with a D1 binding named `DB`.
+  Apply the [D1 migrations](drizzle/). Copy the [example manifest](.openai/hosting.example.json)
+  to the Git-ignored `.openai/hosting.json` and set `project_id`. In hosted runtime settings,
+  set `MAINTAINER_EMAILS` to a comma-separated list of verified ChatGPT email addresses.
+  Keep deployment settings and credentials outside the public repository.
+- **Code policy.** Set deterministic checks under **Settings → Code policy**.
+  See the [quality policy](QUALITY.md) for defaults and scope.
+- **LLM review.** On a fresh instance, saving an OpenAI key and model enables checks
+  for all six file types. Set rules or opt out under **Settings → LLM review** before connecting.
+  See [review settings and defaults](docs/recipe-workflow.md#configure-llm-review).
 
 ### OpenAI assistant
 
-The optional **Assistant** tool in the top bar lets maintainers ask questions about
-published recipes while browsing the app.
-Set a randomly generated 32-byte key, encoded as 64 hexadecimal characters, as the
-`SETTINGS_ENCRYPTION_KEY` deployment secret. Keep a secure copy separate from D1 backups.
-In **Settings → OpenAI**, save a restricted OpenAI project API key with **List models
-(Read)** and **Responses API (Write)**. Bist loads the model catalog so
-you can choose a model that supports the Responses API and function calling. Save the model
-separately. Bist stores the API key encrypted in D1 and shows only
-whether a key is configured. Maintainers can update the model or replace or remove the API key
-without redeploying. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+The optional **Assistant** lets maintainers ask about published recipes. Bist sends recent
+messages and selected published excerpts to OpenAI. The chat stays in the open browser tab.
+The assistant can search published recipes and read source and documentation. Drafts and
+private review feedback stay outside its tool scope.
 
-Use the model catalog in **Settings → OpenAI** to check which models the key can list,
-then send a message in **Assistant** to verify inference and tool support. If upgrading from an
-environment-configured release, enter the model and credential in Bist Settings and remove
-the old `OPENAI_API_KEY` and `OPENAI_MODEL` deployment values. If the deployment encryption
-key changes or is lost, enter the OpenAI credential again to encrypt it under the replacement.
+Set the `SETTINGS_ENCRYPTION_KEY` deployment secret to 32 random bytes encoded as 64 hexadecimal characters.
+Keep a secure copy separate from D1 backups. Under **Settings → OpenAI**, save a restricted
+project key with **List models (Read)** and **Responses API (Write)**. Choose and save a model
+that supports Responses and function calling. Check catalog access in Settings and verify
+inference with a question in **Assistant**.
+[OpenAI integration guide](docs/openai-integration.md)
 
-See [OpenAI integration](docs/openai-integration.md) for the current API calls and proposed
-extensions.
-
-The assistant sends recent messages and any published recipe excerpts it uses to OpenAI.
-The conversation stays in the open browser tab. The assistant can search published recipes and read
-their source and documentation. Submitted drafts and private review feedback stay outside
-its tool scope.
+Bist encrypts the key in D1 and displays only whether it is configured. Maintainers can change
+the model or replace or remove the key without redeploying. When upgrading from an
+environment-configured release, enter the key and model in Settings, then remove
+`OPENAI_API_KEY` and `OPENAI_MODEL` from the deployment. If the encryption key changes or is
+lost, enter the OpenAI key again.
 
 ## Development
 
-From the repository root, after `npm ci`, run the repository checks and tests.
+From the repository root, after `npm ci`, run the checks and tests.
 
 ```sh
 npm run check
 npm test
 ```
 
-The tests exercise the built Worker with Miniflare and a temporary local database. They cover
-submission, review, publication, and retrieval. They run trusted repository fixtures in a
-separate consumer project. See [AGENTS.md](AGENTS.md) for contribution and commit practices.
-[HANDOFF.md](HANDOFF.md) records historical context and plans.
+Run `npm run check:coverage` for the 100% coverage gate. Tests use Miniflare and a temporary
+database for submission, review, publication, and retrieval. They run trusted fixtures in a
+separate project. See [AGENTS.md](AGENTS.md) for contribution rules and
+[HANDOFF.md](HANDOFF.md) for project history.
 
-Report reproducible bugs or request features through
-[GitHub Issues](https://github.com/sendanor/bist/issues). The repository does not document a
-separate channel for security reports.
+Report bugs and request features through [GitHub Issues](https://github.com/sendanor/bist/issues).
+The repository lists no separate security reporting channel.
 
 ## License
 
-Code Cookbook is licensed under the [MIT License](LICENSE).
+[MIT License](LICENSE).
