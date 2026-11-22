@@ -47,7 +47,9 @@ function connectComparison(ui, original, diff) {
   /** Refresh an open comparison after applying a suggestion or changing the view. */
   function refresh() {
     if (!ui.preview.hidden) {
-      ui.preview.replaceChildren(diff(original, ui.content.value, true));
+      ui.preview.replaceChildren(
+        diff(original, ui.content.value, true, t("compared-with-saved-file")),
+      );
     }
   }
   ui.compare.addEventListener("click", () => {

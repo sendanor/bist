@@ -946,12 +946,13 @@ function codeRow(row, number, review) {
 }
 
 /**
- * Render the previous and current contents as aligned columns.
+ * Render line changes against the baseline identified in the comparison heading.
  * @param before The previous text used as the diff baseline.
  * @param after The current text to compare with the baseline.
  * @param wrap Whether source lines wrap in the viewer.
+ * @param baseline Localized label identifying the saved file or revision being compared.
  */
-function diff(before, after, wrap) {
+function diff(before, after, wrap, baseline = t("compared-with-base-revision")) {
   if (before === after) {
     return el("p", { className: "file-empty" }, t("this-file-is-unchanged"));
   }
@@ -988,7 +989,7 @@ function diff(before, after, wrap) {
     el(
       "p",
       { className: "diff-summary" },
-      t("compared-with-base-revision"),
+      baseline,
       chip(`+${counts.added} added`, "state-published"),
       chip(`−${counts.removed} removed`, "state-changes"),
     ),
