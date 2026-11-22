@@ -258,7 +258,17 @@ async function verifyContribution(window) {
   form.elements.slug.value = "browser-verify-draft";
   form.elements.title.value = "Verify a draft in the browser";
   form.elements.summary.value = "Check the complete read and write workflow.";
-  form.elements.documentation.value = "# Browser draft\n\nKeep the original sentence.";
+  const markdown =
+    "# Browser draft\n\nKeep the original sentence.\n\n<b>Literal HTML</b>\n\n![Diagram](https://example.test/diagram.png)";
+  form.elements.documentation.value = markdown;
+  form.elements["filename-documentation"].value = "guide.exe";
+  form.requestSubmit();
+  await eventually(
+    () => document.querySelector("#notice").textContent.includes("supported extension"),
+    "invalid custom filename feedback",
+  );
+  assert.equal(window.location.pathname, "/contribute");
+  assert.equal(form.elements.documentation.value, markdown);
   form.elements["filename-documentation"].value = "GUIDE.md";
   form.requestSubmit();
   await eventually(
@@ -271,6 +281,79 @@ async function verifyContribution(window) {
     document.querySelector("#recipe-part-content-documentation").textContent,
     /Keep the original sentence/u,
   );
+}
+
+/**
+ * Reopen an existing draft in the full form and replace the same revision.
+ * @param window Contributor's current draft page.
+ */
+async function verifyDraftReplacement(window) {
+  const { document } = window;
+  const draftPath = window.location.pathname;
+  document.querySelector(".revision-trigger").click();
+  clickText(document.querySelector(".revision-menu"), "a", "Edit draft");
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Edit draft",
+    "opened full draft editor",
+  );
+  const form = document.querySelector("form.form");
+  assert.equal(form.elements.slug.readOnly, true);
+  assert.equal(form.elements["filename-documentation"].value, "GUIDE.md");
+  form.elements.title.value = "Verify a renamed draft";
+  form.requestSubmit();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Verify a renamed draft",
+    "updated in place",
+  );
+  assert.equal(window.location.pathname, draftPath);
+  assert.match(
+    document.querySelector("#notice").textContent,
+    /Draft updated and submitted for review/u,
+  );
+}
+
+/**
+ * Verify the document viewer preserves raw text and reports clipboard failures accurately.
+ * @param window Author's loaded draft page.
+ */
+async function verifyDocumentDisplay(window) {
+  const section = window.document.querySelector(
+    'section[aria-labelledby="recipe-part-title-documentation"]',
+  );
+  const copy = section.querySelector('button[aria-label="Copy Markdown"]');
+  copy.click();
+  const status = section.querySelector(".copy-status");
+  await eventually(() => status.textContent.includes("Copy unavailable"), "clipboard fallback");
+  let written;
+  Object.defineProperty(window.navigator, "clipboard", {
+    value: {
+      /**
+       * Read clipboard text without accessing the host clipboard.
+       * @param value Markdown selected for copying.
+       */
+      async writeText(value) {
+        written = value;
+      },
+    },
+  });
+  copy.click();
+  await eventually(() => status.textContent === "Copied", "successful clipboard feedback");
+  assert.match(written, /^# Browser draft\n\n/u);
+  section.querySelector('button[aria-label="Markdown source"]').click();
+  const wrap = section.querySelector('button[aria-label="Wrap lines"]');
+  assert.equal(wrap.hidden, false);
+  wrap.click();
+  assert.equal(wrap.getAttribute("aria-pressed"), "false");
+  section.querySelector('button[aria-label="Rendered Markdown"]').click();
+  assert.equal(wrap.hidden, true);
+  assert.equal(
+    section.querySelector("#recipe-part-content-documentation h4").textContent,
+    "Browser draft",
+  );
+  const prose = section.querySelector(".recipe-prose");
+  assert.match(prose.textContent, /<b>Literal HTML<\/b>/u);
+  assert.match(prose.textContent, /Diagram/u);
+  assert.equal(prose.querySelector("img, b"), null);
 }
 
 /**
@@ -473,9 +556,16 @@ async function verifyOpenAiSettings(window, dispatch, key) {
   const settings = await (await dispatch("/api/settings/openai", "maintainer")).json();
   assert.equal(settings.model, "gpt-6-luna");
   assert.equal(settings.reasoningEffort, "none");
+  credential.value = "!";
+  keyForm.requestSubmit();
+  await eventually(
+    () => keyStatus.textContent.includes("valid OpenAI API key"),
+    "invalid key response",
+  );
+  assert.equal(credential.value, "");
   clickText(keyForm, "button", "Remove API key");
   clickText(keyForm, "button", "Cancel");
-  assert.equal(keyStatus.textContent, "");
+  assert.match(keyStatus.textContent, /valid OpenAI API key/u);
   clickText(keyForm, "button", "Remove API key");
   clickText(keyForm, "button", "Confirm removal");
   await eventually(() => keyStatus.textContent === "OpenAI API key removed.", "cleared credential");
@@ -509,6 +599,17 @@ async function verifyReviewSettings(window, dispatch) {
   );
   docs.querySelector("select").value = "warn";
   docs.querySelector("textarea").value = " Check whether examples identify their input. ";
+  form.elements.referenceLibraryId.value = "/fixture/ui";
+  form.requestSubmit();
+  await eventually(
+    () => form.querySelector('[role="status"]').textContent.includes("exact Context7 library ID"),
+    "invalid reference configuration explained",
+  );
+  assert.equal(
+    docs.querySelector("textarea").value.trim(),
+    "Check whether examples identify their input.",
+  );
+  form.elements.referenceLibraryId.value = "";
   form.requestSubmit();
   await eventually(
     () => form.querySelector('[role="status"]').textContent === "Review settings saved.",
@@ -757,6 +858,8 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
   const author = await openPage(dispatch, "/contribute", "browser-author");
   try {
     await verifyContribution(author);
+    await verifyDraftReplacement(author);
+    await verifyDocumentDisplay(author);
     await verifyDraftEditor(author);
     await verifyEditorRecovery(author);
     assert.ok(author.__coverage__["src/file-editor.js"]);
