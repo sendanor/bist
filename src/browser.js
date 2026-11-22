@@ -246,11 +246,11 @@ function tagTerm(tag) {
 
 /**
  * Split typed tag terms from keywords and keep other submitted listing filters.
- * @param form The search form fields or intermediate search parameters.
+ * @param input The text from the keyword and tag field.
+ * @param fields Additional submitted form fields to retain.
  */
-function searchFilters(form) {
-  const filters = new URLSearchParams(form);
-  const input = filters.get("query") ?? "";
+function searchFilters(input, fields) {
+  const filters = new URLSearchParams(fields);
   const query = input.replace(
     /(?<!\S)tag:("(?:[^"\\]|\\(?:["\\/bfnrt]|u[\da-f]{4}))*"(?=\s|$)|[^\s"]+)/giu,
     (term, value) => {
@@ -291,7 +291,7 @@ function listingSearchField(label, filters, tags) {
   function updateSuggestions() {
     const partial = input.value.match(/(?:^|\s)(tag:[^\s"]*)$/iu)?.[1];
     const prefix = partial ? input.value.slice(0, -partial.length) : input.value.trimEnd() + " ";
-    const selected = searchFilters(new URLSearchParams({ query: prefix })).getAll("tag");
+    const selected = searchFilters(prefix, undefined).getAll("tag");
     suggestions.replaceChildren(
       ...tags
         .filter((tag) => !selected.includes(tag))
@@ -342,7 +342,10 @@ function listingForm(section, filters, tags) {
        */
       onsubmit: (event) => {
         event.preventDefault();
-        navigate(listingPath(section, searchFilters(new FormData(event.currentTarget))));
+        const form = event.currentTarget;
+        navigate(
+          listingPath(section, searchFilters(form.elements.query.value, new FormData(form))),
+        );
       },
     },
     listingSearchField(

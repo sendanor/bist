@@ -575,6 +575,41 @@ async function verifyLibrarySearch(window) {
 }
 
 /**
+ * Keep a revision's stored state readable when the browser lacks its display label.
+ * @param window Maintainer's initialized library page.
+ * @param dispatch Transport for loading a valid persisted revision to use in the fixture.
+ */
+async function verifyUnrecognizedState(window, dispatch) {
+  const { document } = window;
+  const { items } = await (await dispatch("/api/search", "maintainer")).json();
+  const [{ slug, id }] = items;
+  const state = "legacy-state";
+  const query = new URLSearchParams({ slug, revision: id, reviewComments: "1" });
+  const recipePath = "/api/recipe?" + query;
+  const recipe = await (await dispatch(recipePath, "maintainer")).json();
+  const mine = { items: [{ ...items[0], state }], previousCursor: null, nextCursor: null };
+  replyOnce(window, "/api/mine", Response.json(mine));
+  document.querySelector('nav a[href="/mine"]').click();
+  await eventually(
+    () => Boolean(document.querySelector(".recipe .state-legacy-state")),
+    "legacy state in listing",
+  );
+  assert.equal(document.querySelector(".recipe .state-legacy-state").textContent, state);
+  replyOnce(window, recipePath, Response.json({ ...recipe, state }));
+  clickText(document, ".recipe h3 a", recipe.title);
+  await eventually(
+    () => Boolean(document.querySelector(".recipe-byline .state-legacy-state")),
+    "legacy state in recipe",
+  );
+  assert.equal(document.querySelector(".recipe-byline .state-legacy-state").textContent, state);
+  document.querySelector('nav a[href="/library"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Recipe library",
+    "returned to library",
+  );
+}
+
+/**
  * Submit Markdown-only content with a custom filename and normalized tags.
  * @param window Contributor's initialized page.
  */
@@ -2021,6 +2056,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
   const maintainer = await openPage(dispatch, "/library", "maintainer");
   try {
     await verifyLibrarySearch(maintainer);
+    await verifyUnrecognizedState(maintainer, dispatch);
     verifyNativeLinkHandling(maintainer);
     await verifyListingRace(maintainer);
     await verifyEmptyListings(maintainer);
