@@ -130,6 +130,15 @@ test("assistant rejects oversized requests and distinguishes timed-out or malfor
   }
   const timeout = AbortSignal.abort(new DOMException("Fixture timed out", "TimeoutError"));
   await assert.rejects(
+    requestToolItems(config, turn, live.signal, async () => {
+      throw new TypeError("Private provider transport diagnostics.");
+    }),
+    {
+      status: 502,
+      message: "OpenAI could not complete the request. Check the configured model and API access.",
+    },
+  );
+  await assert.rejects(
     requestToolItems(config, turn, timeout, async (_url, request) => {
       request?.signal?.throwIfAborted();
       return assert.fail("aborted request went through");
@@ -146,7 +155,13 @@ test("assistant returns provider refusals and rejects an empty answer", async ()
       status: "completed",
       output: [
         { type: "reasoning" },
-        { type: "message", content: [{ type: "refusal", refusal: "Cannot answer." }] },
+        {
+          type: "message",
+          content: [
+            { type: "output_text", text: null },
+            { type: "refusal", refusal: "Cannot answer." },
+          ],
+        },
       ],
     }),
   );
@@ -230,6 +245,23 @@ test("review preserves rate limiting and rejects malformed or unfinished upstrea
       },
     );
   }
+});
+
+test("review reports a provider deadline without disclosing any transport details", async (t) => {
+  const timedOut = AbortSignal.abort(new DOMException("Private provider detail", "TimeoutError"));
+  t.mock.method(AbortSignal, "timeout", () => timedOut);
+  await assert.rejects(
+    runOpenAiReview(
+      config,
+      [{ part: "documentation", instruction: "Review usage.", content: "# Usage" }],
+      async (_url, options) => {
+        assert.equal(options?.signal, timedOut);
+        timedOut.throwIfAborted();
+        return assert.fail("expired review reached provider");
+      },
+    ),
+    { status: 504, message: "The OpenAI request timed out." },
+  );
 });
 
 test("assistant rejects oversized tool arguments before executing a local lookup", async () => {
