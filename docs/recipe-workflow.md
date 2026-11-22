@@ -104,26 +104,27 @@ to 20 summaries and accept a `limit` from 1 to 50. To continue, send the returne
 Omit the cursor when changing filters. Listings return metadata only. Use `get_recipe` with
 selected `parts` for file content.
 
-When an LLM review finds a warning, `submit_recipe` pauses before saving the revision.
-The MCP result has `isError: true`, the code `llm_warning`, each affected file part and
-reason, and a `reviewReceipt`. Clients that display plain text receive the same findings
-and receipt. Show every finding to the user and wait for their decision.
+Agents handle submission findings directly. Fix actionable warnings and validation errors,
+then call `submit_recipe` again with the complete corrected snapshot. Omit previous warning
+acknowledgements when sending corrections. A blocking finding requires a fix. Maintainers
+review the submitted revision before publication.
 
-- **Correct the files.** Resubmit the corrected snapshot without a receipt. Bist checks
-  changed files covered by the current rules.
-- **Submit with warnings.** After the user explicitly accepts them, repeat the same
-  call with the returned `reviewReceipt`. The receipt expires after ten minutes and
-  applies to that user's submission and warning list. The revision enters human review
-  with those warnings attached.
+An `llm_warning` stops the save and returns the affected parts, reasons, next steps and a
+`reviewReceipt` in both plain text and structured content. If, after assessing every
+finding, the agent deliberately retains the remaining warnings, it can retry the unchanged
+snapshot with that receipt. The receipt lasts ten minutes and applies to that submitter,
+snapshot and warning list. Reviewers see the findings beside the affected files.
+This also covers visible warnings from an earlier recheck of an unchanged file.
 
-This also applies to saved warnings that the submitter can see on unchanged files,
-including findings from a maintainer's recheck. Bist can ask for that acknowledgement
-without calling the model. A new **Block** finding requires the affected content to be fixed.
+If a successful submission returns quality warnings and an `id`, the draft is already
+pending review. Fix actionable findings in that draft using its `id` as `replace` and
+the returned `editVersion`.
 
 Duplicate checks consider your active revisions and published recipes. Code is compared as a
 whole snapshot, while documentation and agent instructions are checked separately.
-Maintainers can disable, warn on, or block duplicates. Retry with `allowDuplicates: true`
-only to acknowledge a duplicate warning. Older revisions are indexed in batches, so you
+Maintainers can disable, warn on, or block duplicates. Reuse a matching recipe or remove
+unintended duplication. Retry with `allowDuplicates: true` only for an intentional
+duplicate reported as a warning. Older revisions are indexed in batches, so you
 may be asked to retry a submission while that work finishes. See the
 [quality policy](../QUALITY.md) for other checks.
 
