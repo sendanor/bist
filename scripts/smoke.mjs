@@ -3,6 +3,11 @@ import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
 import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
 import { verifyWorkerValidation } from "../tests/worker-validation.mjs";
 import {
+  context7ReviewFixture,
+  unavailableReference,
+  verifyContext7RecipeReview,
+} from "../tests/context7-recipe-review.mjs";
+import {
   assertAgentAdvice,
   correctedReadme,
   expectMcpWarnings,
@@ -1538,6 +1543,11 @@ describe("hasFields", () => {
         }
         assert.equal(method, "tools/call");
         if (context7) {
+          if (params.arguments.query === unavailableReference) {
+            assert.equal(params.name, "query-docs");
+            assert.equal(params.arguments.libraryId, "/react/react");
+            return new Response(null, { status: 503 });
+          }
           assert.deepEqual(params, {
             name: "query-docs",
             arguments: { query: "React state", libraryId: "/react/react" },
@@ -1588,6 +1598,10 @@ describe("hasFields", () => {
         llmReviewCalls++;
         assert.equal(body.model, "gpt-6.2-sol");
         assert.equal(body.store, false);
+        const context7Review = context7ReviewFixture(body);
+        if (context7Review) {
+          return context7Review;
+        }
         if (body.instructions.includes(recheckCriterion)) {
           assert.deepEqual(body.reasoning, { effort: "low" });
           return reviewStoredFixture(body);
@@ -2031,6 +2045,7 @@ describe("hasFields", () => {
   await verifyOfflineFileEditor(dispatch);
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
   await verifyWorkerValidation(dispatch, await runtime.getD1Database("DB"));
+  await verifyContext7RecipeReview(dispatch, await runtime.getD1Database("DB"));
   if (coverageOutput) {
     catalogModels.push("gpt-6.2-sol", "gpt-6-luna");
     const { exerciseBrowser } = await import("../tests/browser-coverage.mjs");
