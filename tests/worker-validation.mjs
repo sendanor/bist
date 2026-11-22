@@ -52,6 +52,7 @@ async function verifyProtocol(dispatch) {
     [null, {}, -32600],
     ["unknown/method", {}, -32601],
     ["tools/call", { name: "unknown_tool" }, -32602],
+    ["tools/call", { name: 1 }, -32602],
   ]) {
     const result = await (await rpc(method, params, "author")).json();
     assert.equal(result.id, "fixture-rpc");

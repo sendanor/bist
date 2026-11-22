@@ -109,7 +109,12 @@ const files = Object.fromEntries(
  * @param properties The JSON Schema definitions for accepted arguments.
  * @param required The argument keys required by the tool.
  */
-const tool = (name: string, description: string, properties: Input, required: string[] = []) => ({
+const tool = <Name extends string>(
+  name: Name,
+  description: string,
+  properties: Input,
+  required: string[] = [],
+) => ({
   name,
   description,
   inputSchema: { type: "object", properties, required, additionalProperties: false },
@@ -380,16 +385,17 @@ async function mcp(request: Request, cookbook: Cookbook | null, env: Env) {
       throw new RequestError("Sign in to use the cookbook.");
     }
     const params = object(rpc.params);
-    if (!isString(params.name) || !toolNames.includes(params.name)) {
+    const selected = tools.find(({ name }) => name === params.name);
+    if (!selected) {
       return fail(-32602, "Unknown tool.");
     }
     const settings = await readMcpSettings(db, toolNames);
-    if (!settings.enabled || !settings.enabledTools.includes(params.name)) {
+    if (!settings.enabled || !settings.enabledTools.includes(selected.name)) {
       throw new RequestError("This MCP tool is disabled.");
     }
     const input = object(params.arguments ?? {});
     let value: unknown;
-    switch (params.name) {
+    switch (selected.name) {
       case "search_recipes":
         value = await cookbook.search(input);
         break;
@@ -422,8 +428,6 @@ async function mcp(request: Request, cookbook: Cookbook | null, env: Env) {
       case "review_queue":
         value = await cookbook.queue(input, false);
         break;
-      default:
-        return fail(-32602, "Unknown tool.");
     }
     return result({ content: [{ type: "text", text: JSON.stringify(value) }] });
   } catch (error) {
