@@ -1,6 +1,7 @@
 import { repositoryRecipe } from "./repository-recipes.mjs";
 import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
 import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
+import { verifyWorkerValidation } from "../tests/worker-validation.mjs";
 import {
   assertAgentAdvice,
   correctedReadme,
@@ -2029,6 +2030,7 @@ describe("hasFields", () => {
   assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
   await verifyOfflineFileEditor(dispatch);
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
+  await verifyWorkerValidation(dispatch);
   if (coverageOutput) {
     catalogModels.push("gpt-6.2-sol", "gpt-6-luna");
     const { exerciseBrowser } = await import("../tests/browser-coverage.mjs");
