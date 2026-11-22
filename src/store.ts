@@ -485,6 +485,7 @@ export class Cookbook {
    * @param model Model ID approved by the current maintainer, or null to preserve the saved model.
    * @param credential Replacement encrypted envelope, or null to preserve the existing value.
    * @param effort Explicit reasoning effort, or null to retain it unless the model changes.
+   * @throws {RequestError} If the caller lacks maintainer permissions.
    */
   async saveOpenAiSettings(model: string | null, credential: string | null, effort: string | null) {
     this.maintainer();
@@ -501,7 +502,7 @@ export class Cookbook {
     );
     const saveConnection = this.sql(
       `INSERT INTO openai_settings (id, model, credential, reasoning_effort)
-       SELECT 1, COALESCE(?, ''), ?, COALESCE(?, '') WHERE ? = 1
+       VALUES (1, COALESCE(?, ''), ?, COALESCE(?, ''))
        ON CONFLICT(id) DO UPDATE SET model = COALESCE(?, openai_settings.model),
          credential = COALESCE(excluded.credential, openai_settings.credential),
          reasoning_effort = COALESCE(?, CASE WHEN ? IS NOT NULL AND excluded.model != openai_settings.model
@@ -509,7 +510,6 @@ export class Cookbook {
       model,
       credential,
       effort,
-      this.user.maintainer ? 1 : 0,
       model,
       effort,
       model,
@@ -517,13 +517,13 @@ export class Cookbook {
     await this.db.batch([initializeReview, saveConnection]);
   }
 
-  /** Remove the OpenAI credential while leaving the configured model in place. */
+  /**
+   * Remove the OpenAI credential while leaving the configured model in place.
+   * @throws {RequestError} If the caller lacks maintainer permissions.
+   */
   async removeOpenAiKey() {
     this.maintainer();
-    await this.sql(
-      "UPDATE openai_settings SET credential = NULL WHERE id = 1 AND ? = 1",
-      this.user.maintainer ? 1 : 0,
-    ).run();
+    await this.sql("UPDATE openai_settings SET credential = NULL WHERE id = 1").run();
   }
 
   /**
@@ -1108,9 +1108,9 @@ export class Cookbook {
   /**
    * Submit or replace an unapproved revision after validation and duplicate checks.
    * @param input The proposed recipe and revision operation received from the client.
-   * @param review Optional configured review pipeline for new file content.
+   * @param review The instance review pipeline, which reads the saved policy for new content.
    */
-  async submit(input: Input, review?: SubmissionReview) {
+  async submit(input: Input, review: SubmissionReview) {
     const slug = str(input.slug, "recipe slug", 64);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       throw new RequestError("Use a lowercase hyphenated slug.");
@@ -1174,25 +1174,14 @@ export class Cookbook {
       files: JSON.stringify(files),
       fileNames: JSON.stringify(fileNames),
     };
-    const reviewed = review
-      ? await review({
-          actor: this.user.id,
-          intent: [
-            slug,
-            base,
-            replace,
-            editVersion,
-            title,
-            summary,
-            payload.tags,
-            payload.fileNames,
-          ],
-          files,
-          previous: decodeFiles(previous?.files ?? null, parts),
-          previousWarnings: decodeLlmFindings(previous?.llm_warnings ?? null),
-          receipt: str(input.reviewReceipt, "LLM review receipt", 36, true),
-        })
-      : [];
+    const reviewed = await review({
+      actor: this.user.id,
+      intent: [slug, base, replace, editVersion, title, summary, payload.tags, payload.fileNames],
+      files,
+      previous: decodeFiles(previous?.files ?? null, parts),
+      previousWarnings: decodeLlmFindings(previous?.llm_warnings ?? null),
+      receipt: str(input.reviewReceipt, "LLM review receipt", 36, true),
+    });
     const savedWarnings = JSON.stringify(reviewed);
     const notices = warnings.length ? { warnings } : {};
     if (replace) {
@@ -1214,7 +1203,7 @@ export class Cookbook {
         slug,
         this.user.id,
         editVersion,
-        previous?.llm_warnings ?? "[]",
+        previous!.llm_warnings,
         ...match,
       ).run();
       if (!updated.meta.changes) {

@@ -374,6 +374,15 @@ async function verifyStoredData(dispatch, db) {
   );
   assert.equal(withoutName.status, 201);
   assert.equal((await withoutName.json()).authorName, null);
+  const anonymousReviewer = await dispatch(detail + "&reviewComments=1", "maintainer", undefined, {
+    "oai-authenticated-user-full-name": "%E2%80%8B",
+  });
+  assert.equal(anonymousReviewer.status, 200);
+  const { review } = await anonymousReviewer.json();
+  assert.deepEqual(
+    review.comments.map(({ authorName }) => authorName),
+    ["maintainer", null],
+  );
   await db
     .prepare(
       "CREATE TRIGGER skip_test_comment BEFORE INSERT ON revision_comments BEGIN SELECT RAISE(IGNORE); END",
