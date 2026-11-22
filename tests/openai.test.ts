@@ -210,3 +210,62 @@ test("review rejects missing findings, empty reasons and unapproved lookups", as
   );
   assert.equal(lookups, 1);
 });
+
+test("review preserves rate limiting and rejects malformed or unfinished upstream responses", async () => {
+  const items = [{ part: "documentation", instruction: "Review usage.", content: "# Usage" }];
+  for (const [reply, status] of [
+    [Response.json({ error: "private details" }, { status: 429 }), 429],
+    [Response.json({ error: "private details" }, { status: 503 }), 502],
+    [Response.json({ status: "incomplete", output: [] }), 502],
+    [Response.json({ status: "completed", output: [null] }), 502],
+  ] as const) {
+    await assert.rejects(
+      runOpenAiReview(config, items, async () => reply),
+      {
+        status,
+        message:
+          status === 429
+            ? "OpenAI is rate limiting requests. Try again later."
+            : "OpenAI could not complete the request. Check the configured model and API access.",
+      },
+    );
+  }
+});
+
+test("assistant rejects oversized tool arguments before executing a local lookup", async () => {
+  let calls = 0;
+  const answer = await runOpenAiAssistant(
+    config,
+    "Find a guide",
+    async () => assert.fail("unvalidated lookup executed"),
+    async (_url, options) => {
+      const input = JSON.parse(String(options?.body)).input;
+      calls++;
+      if (calls === 1) {
+        return Response.json({
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              name: "search_recipes",
+              call_id: "oversized",
+              arguments: JSON.stringify({ query: "x".repeat(1_001) }),
+            },
+          ],
+        });
+      }
+      assert.deepEqual(JSON.parse(input.at(-1).output), { error: "Invalid tool arguments." });
+      return Response.json({
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "Use shorter search terms." }],
+          },
+        ],
+      });
+    },
+  );
+  assert.equal(answer, "Use shorter search terms.");
+  assert.equal(calls, 2);
+});
