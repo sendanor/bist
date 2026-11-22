@@ -157,7 +157,16 @@ async function verifyAssistant(window) {
     return Promise.resolve(
       Response.json({
         answer: sent.length === 1 ? "This is the first reply." : "This is the follow-up.",
-        sources: [],
+        sources:
+          sent.length === 1
+            ? [
+                {
+                  slug: "assistant-reference-fixture",
+                  id: "00000000-0000-4000-8000-000000000031",
+                  title: "Fixture recipe reference",
+                },
+              ]
+            : [],
         docsSources:
           sent.length === 1
             ? [{ url: "https://example.test/reference", title: "Fixture documentation" }]
@@ -171,6 +180,9 @@ async function verifyAssistant(window) {
     toggle.click();
     await eventually(() => Boolean(panel.querySelector("form")), "Assistant composer opened");
     const form = panel.querySelector("form");
+    form.elements.question.value = "  ";
+    form.requestSubmit();
+    assert.equal(sent.length, 0);
     clickText(form, "button", "Search documentation");
     form.elements.docsQuery.value = "Article structure";
     form.elements.libraryId.value = "/fixture/library";
@@ -180,6 +192,10 @@ async function verifyAssistant(window) {
       () => Boolean(panel.querySelector('a[href="https://example.test/reference"]')),
       "rendered reference link",
     );
+    const recipeLink = panel.querySelector(
+      'a[href^="/recipe/library/assistant-reference-fixture/"]',
+    );
+    assert.equal(recipeLink.textContent, "Fixture recipe reference");
     assert.equal(sent[0].docsQuery, "Article structure");
     assert.equal(sent[0].libraryId, "/fixture/library");
     assert.deepEqual(sent[0].history, []);
@@ -201,12 +217,45 @@ async function verifyAssistant(window) {
       () => panel.textContent.includes("This is the follow-up."),
       "successful retry",
     );
-    document
-      .querySelector("#assistant-resize")
-      .dispatchEvent(
-        new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
-      );
-    assert.ok(panel.parentElement.style.getPropertyValue("--assistant-width"));
+    const handle = document.querySelector("#assistant-resize");
+    const workspace = panel.parentElement;
+    Object.defineProperty(workspace, "clientWidth", { value: 1_000 });
+    /** Supply the right edge of the layout-free workspace for pointer resizing. */
+    workspace.getBoundingClientRect = () => ({ right: 1_000 });
+    let captured;
+    /**
+     * Record pointer capture requested by the resize handle in the synthetic DOM.
+     * @param pointerId Active pointer identifier provided by the browser.
+     */
+    handle.setPointerCapture = (pointerId) => {
+      captured = pointerId;
+    };
+    /**
+     * Simulate the browser checking ownership before acting on a pointer move.
+     * @param pointerId Identifier of the pointer trying to change the width.
+     */
+    handle.hasPointerCapture = (pointerId) => captured === pointerId;
+    const drag = new window.MouseEvent("pointermove", { clientX: 525 });
+    Object.defineProperty(drag, "pointerId", { value: 1 });
+    handle.dispatchEvent(drag);
+    assert.equal(workspace.style.getPropertyValue("--assistant-width"), "");
+    const start = new window.MouseEvent("pointerdown", { button: 0, cancelable: true });
+    Object.defineProperty(start, "pointerId", { value: 1 });
+    handle.dispatchEvent(start);
+    assert.equal(start.defaultPrevented, true);
+    handle.dispatchEvent(drag);
+    assert.equal(workspace.style.getPropertyValue("--assistant-width"), "475px");
+    assert.equal(handle.getAttribute("aria-valuenow"), "475");
+    /** Supply the rendered width before keyboard resizing. */
+    panel.getBoundingClientRect = () => ({ width: 475 });
+    handle.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    assert.equal(workspace.style.getPropertyValue("--assistant-width"), "451px");
+    handle.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
+    );
+    assert.equal(workspace.style.getPropertyValue("--assistant-width"), "499px");
     form.elements.question.value = "A draft that survives closing.";
     panel.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert.equal(panel.hidden, true);
@@ -280,6 +329,23 @@ async function verifyLibrarySearch(window) {
       !document.querySelector(".list-filter-actions a"),
     "unfiltered results",
   );
+  replyOnce(
+    window,
+    "/api/tags?scope=review",
+    Response.json({ error: "Tag suggestions unavailable." }, { status: 503 }),
+  );
+  document.querySelector('nav a[href="/review"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Review queue",
+    "review queue loaded without tag suggestions",
+  );
+  assert.ok(document.querySelector(".recipe"));
+  assert.ok(document.querySelector('input[name="query"]'));
+  document.querySelector('nav a[href="/library"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Recipe library",
+    "returned to library after a failed suggestion request",
+  );
 }
 
 /**
@@ -291,9 +357,26 @@ async function verifyContribution(window) {
   const form = document.querySelector("form.form");
   clickText(form, "button", "Fill with example");
   assert.equal(form.elements.slug.value, "batch-items");
-  form.elements.tagEntry.value = "a".repeat(33);
+  const entry = form.elements.tagEntry;
+  const suggestions = form.querySelector(".recipe-tags select");
+  assert.ok(suggestions.querySelector('option[value="paging"]'));
+  suggestions.value = "paging";
+  suggestions.dispatchEvent(new window.Event("change", { bubbles: true }));
+  const paging = form.querySelector('button[aria-label="Remove tag paging"]');
+  assert.ok(paging);
+  assert.equal(suggestions.value, "");
+  assert.equal(suggestions.querySelector('option[value="paging"]').disabled, true);
+  paging.click();
+  assert.equal(suggestions.querySelector('option[value="paging"]').disabled, false);
+  entry.value = "one,two,three,four,five,six,seven,eight,nine";
   clickText(form, "button", "Add tags");
-  assert.equal(form.elements.tagEntry.validity.valid, false);
+  assert.match(entry.validationMessage, /eight tags/u);
+  assert.equal(form.querySelector('[aria-label="Remove tag nine"]'), null);
+  entry.value = "a".repeat(33);
+  entry.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(entry.validity.valid, true);
+  clickText(form, "button", "Add tags");
+  assert.equal(entry.validity.valid, false);
   form.querySelector('button[aria-label="Remove tag arrays"]').click();
   form.elements.tagEntry.value = " VALIDATION, validation, ";
   form.elements.tagEntry.dispatchEvent(
@@ -307,7 +390,10 @@ async function verifyContribution(window) {
   form.elements.title.value = "Verify a draft in the browser";
   form.elements.summary.value = "Check the complete read and write workflow.";
   const markdown =
-    "# Browser draft\n\nKeep the original sentence.\n\n<b>Literal HTML</b>\n\n![Diagram](https://example.test/diagram.png)";
+    "# Browser draft\n\nKeep the original sentence.\n\n<b>Literal HTML</b>\n\n" +
+    "![Diagram](https://example.test/diagram.png)\n\n" +
+    "[Public reference](https://example.test/guide) and [local reference](./guide.md).\n\n" +
+    "| Action | Result |\n| --- | --- |\n| Save | Pending |";
   form.elements.documentation.value = markdown;
   form.elements["filename-documentation"].value = "guide.exe";
   form.requestSubmit();
@@ -402,6 +488,16 @@ async function verifyDocumentDisplay(window) {
   assert.match(prose.textContent, /<b>Literal HTML<\/b>/u);
   assert.match(prose.textContent, /Diagram/u);
   assert.equal(prose.querySelector("img, b"), null);
+  const [external, local] = prose.querySelectorAll("a");
+  assert.equal(external.href, "https://example.test/guide");
+  assert.equal(external.target, "_blank");
+  assert.equal(external.rel, "noopener noreferrer");
+  assert.equal(local.textContent, "local reference");
+  assert.equal(local.hasAttribute("href"), false);
+  const table = prose.querySelector('[role="region"]');
+  assert.ok(table.getAttribute("aria-label"));
+  assert.equal(table.tabIndex, 0);
+  assert.equal(table.querySelector("tbody td:last-child").textContent, "Pending");
 }
 
 /**
@@ -452,7 +548,15 @@ async function verifyReviewerComments(window) {
   assert.match(section.textContent, /Browser fixture whole-file feedback/u);
   section.querySelector('button[aria-label="Markdown source"]').click();
   const line = section.querySelector('button[aria-label="Comment on line 1"]');
-  line.closest(".code-line").querySelector("code").click();
+  const lineText = line.closest(".code-line").querySelector("code");
+  const selection = window.getSelection();
+  const text = lineText.firstChild;
+  selection.setBaseAndExtent(text, 0, text, text.length);
+  assert.equal(selection.isCollapsed, false);
+  lineText.click();
+  assert.equal(section.querySelector(".review-comment-form"), null);
+  selection.removeAllRanges();
+  lineText.click();
   const comment = section.querySelector(".review-comment-form");
   comment.elements.body.value = "Browser fixture feedback for the first line.";
   comment.requestSubmit();
@@ -544,11 +648,21 @@ async function verifyProposalComparison(window) {
   form.elements.documentation.value =
     "# Comparison guide\n\nA new usage example for the proposed revision.";
   form.elements.instructions.value = "";
+  const submit = form.querySelector("[type=submit]");
   form.requestSubmit();
   await eventually(
     () => Boolean(document.querySelector('dialog[aria-labelledby="submission-warning-heading"]')),
     "duplicate code acknowledgement required",
   );
+  clickText(document.querySelector("dialog"), "button", "Cancel");
+  await eventually(
+    () => document.activeElement === submit && !submit.disabled,
+    "cancelled acknowledgement restores the form",
+  );
+  assert.match(window.location.pathname, /^\/improve\//u);
+  assert.match(form.elements.documentation.value, /A new usage example/u);
+  form.requestSubmit();
+  await eventually(() => document.querySelector("dialog")?.open, "duplicate warning reopened");
   clickText(document.querySelector("dialog"), "button", "Submit anyway");
   await eventually(
     () =>
@@ -573,6 +687,12 @@ async function verifyProposalComparison(window) {
   assert.equal(docs.querySelector("h4").textContent, "Comparison guide");
   const oldInstructions = document.querySelector("#recipe-part-content-instructions");
   assert.match(oldInstructions.textContent, /omits this file/u);
+  const instructions = oldInstructions.closest(".recipe-part");
+  instructions.querySelector('button[aria-label="Show changes"]').click();
+  assert.ok(oldInstructions.querySelector(".diff-removed"));
+  const source = document.querySelector('section[aria-labelledby="recipe-part-title-source"]');
+  source.querySelector('button[aria-label="Show changes"]').click();
+  assert.match(source.textContent, /unchanged/u);
   window.history.go(-2);
   await eventually(
     () =>
@@ -616,9 +736,26 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   clickText(reconsider, "button", "Cancel");
   assert.ok(!reconsider.isConnected);
   choose("Approve revision");
-  document.querySelector('dialog textarea[name="reason"]').value =
-    "Verified in the browser fixture.";
-  document.querySelector("dialog form").requestSubmit();
+  const approval = document.querySelector("dialog form");
+  const reason = approval.elements.reason;
+  reason.value = "Verified in the browser fixture.";
+  replyOnce(
+    window,
+    "/api/action",
+    Response.json({ error: "Approval temporarily unavailable." }, { status: 503 }),
+  );
+  approval.requestSubmit();
+  const cancelDuringSave = new window.Event("cancel", { cancelable: true });
+  approval.closest("dialog").dispatchEvent(cancelDuringSave);
+  assert.equal(cancelDuringSave.defaultPrevented, true);
+  await eventually(
+    () =>
+      approval.querySelector('[role="alert"]').textContent === "Approval temporarily unavailable.",
+    "approval failure shown in the open dialog",
+  );
+  assert.equal(reason.readOnly, false);
+  assert.equal(reason.value, "Verified in the browser fixture.");
+  approval.requestSubmit();
   await eventually(() => byline()?.querySelector(".state-approved"), "approval shown");
   choose("Publish approved revision");
   document.querySelector("dialog form").requestSubmit();
