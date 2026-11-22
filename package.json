@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "npm run test:unit && npm run build && node scripts/smoke.mjs",
+    "test:coverage": "node scripts/coverage.mjs",
+    "check:coverage": "node scripts/coverage.mjs --check",
     "build": "node scripts/build.mjs",
     "check": "npm run check:secrets && npm run format:check && npm run lint && npm run typecheck && npm run check:project && npm run check:duplicates && npm run build",
     "check:secrets": "node scripts/check-secrets.mjs",
@@ -42,8 +44,12 @@
     "@typescript-eslint/parser": "8.73.0",
     "eslint": "9.39.2",
     "globals": "16.5.0",
+    "istanbul-lib-coverage": "3.2.2",
+    "istanbul-lib-instrument": "6.0.3",
+    "istanbul-lib-source-maps": "5.0.6",
     "js-tiktoken": "1.0.21",
     "jscpd": "5.4.3",
+    "jsdom": "26.1.0",
     "miniflare": "4.20260730.0",
     "stylelint": "16.26.1",
     "stylelint-config-standard": "39.0.1"

@@ -37,4 +37,18 @@ JavaScript and TypeScript. It adds a blank line between adjacent declarations, b
 attached to the next definition. Overloads stay together. Recipes use the same spacing by default.
 Maintainers can toggle **Blank lines between declarations** under **Settings → Prettier**.
 
+## Test coverage
+
+The target is 100% line, branch and function coverage across the project's executable
+JavaScript and TypeScript under `src/`.
+
+- `npm run test:coverage` combines Node unit tests, Miniflare Worker tests and browser
+  behavior tests running in jsdom. The report includes project files with no hits
+  and writes detailed counters to `coverage/coverage-final.json`.
+- `npm run check:coverage` runs the same suite and fails if any of the three metrics
+  falls short of 100%. Use the report command to follow progress toward the target.
+- `npm test` also retains the existing coverage floor for the parser, diff and shared
+  rule implementation. The coverage build uses a temporary directory outside the
+  release output and never adds coverage instrumentation to a published bundle.
+
 See [development instructions](README.md#development) and [the original handoff](HANDOFF.md).

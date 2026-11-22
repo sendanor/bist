@@ -31,13 +31,18 @@ import { getEncoding } from "js-tiktoken";
 import { performance } from "node:perf_hooks";
 
 const folder = await mkdtemp(join(tmpdir(), "cookbook-"));
+const coverageOutput = process.env.BIST_TEST_COVERAGE;
+let workerRun = 0;
 /**
  * Start a test Worker using the shared temporary database directory.
  * @param options Optional bindings and outbound fixture transport.
  */
 const worker = (options = {}) =>
   new Miniflare({
-    scriptPath: resolve("dist/server/index.js"),
+    scriptPath: coverageOutput
+      ? resolve(coverageOutput, "worker.js")
+      : resolve("dist/server/index.js"),
+    ...(coverageOutput ? { modulesRoot: coverageOutput } : {}),
     modules: true,
     compatibilityDate: "2026-07-30",
     compatibilityFlags: ["nodejs_compat"],
@@ -47,6 +52,25 @@ const worker = (options = {}) =>
     bindings: { MAINTAINER_EMAILS: "maintainer@example.test", ...options.bindings },
   });
 let runtime = worker();
+
+/** Collect test-only coverage before disposing the Worker and its isolate. */
+async function disposeRuntime() {
+  try {
+    if (coverageOutput) {
+      const response = await runtime.dispatchFetch("https://cookbook.local/__bist_test_coverage");
+      assert.equal(response.status, 200);
+      const counts = await response.json();
+      assert.ok(counts["src/index.ts"]);
+      await writeFile(
+        join(coverageOutput, "worker-" + ++workerRun + ".json"),
+        JSON.stringify(counts),
+      );
+    }
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 /**
  * Dispatch a request against the local Worker with a synthetic identity.
  * @param path The path to request within the Worker.
@@ -1252,7 +1276,7 @@ describe("hasFields", () => {
     },
   };
   assert.equal((await dispatch("/api/settings", "maintainer", persistedPolicy)).status, 200);
-  await runtime.dispose();
+  await disposeRuntime();
   runtime = worker();
   const restored = (await (await dispatch("/api/settings", "maintainer")).json()).policy;
   assert.equal(restored.quality.cssClasses, "warn");
@@ -1477,7 +1501,7 @@ describe("hasFields", () => {
     .prepare("UPDATE revisions SET files = ? WHERE id = ?")
     .bind(JSON.stringify({ documentation: "Private draft." }), firstPrivate)
     .run();
-  await runtime.dispose();
+  await disposeRuntime();
   const model = "fixture-model";
   let key = "test-provider-credential";
   const deploymentKey = "12".repeat(32);
@@ -1788,7 +1812,7 @@ describe("hasFields", () => {
     await secretsDb.prepare("SELECT credential FROM openai_settings WHERE id = 1").first(),
     row,
   );
-  await runtime.dispose();
+  await disposeRuntime();
   runtime = worker(provider);
   assert.deepEqual(await (await dispatch("/api/assistant", "maintainer")).json(), {
     configured: true,
@@ -1975,7 +1999,7 @@ describe("hasFields", () => {
     .prepare("UPDATE openai_settings SET credential = ? WHERE id = 1")
     .bind(row.credential)
     .run();
-  await runtime.dispose();
+  await disposeRuntime();
   runtime = worker({
     ...provider,
     bindings: {
@@ -1984,7 +2008,7 @@ describe("hasFields", () => {
     },
   });
   assert.equal((await dispatch("/api/settings/openai/remove-key", "maintainer", {})).status, 403);
-  await runtime.dispose();
+  await disposeRuntime();
   runtime = worker({ ...provider, bindings: { SETTINGS_ENCRYPTION_KEY: rotatedDeploymentKey } });
   assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
   key = "replacement-provider-credential";
@@ -2004,6 +2028,10 @@ describe("hasFields", () => {
   assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
   await verifyOfflineFileEditor(dispatch);
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
+  if (coverageOutput) {
+    const { exerciseBrowser } = await import("../tests/browser-coverage.mjs");
+    await exerciseBrowser(dispatch, coverageOutput, namedRef);
+  }
   console.log(
     JSON.stringify({
       passed:
@@ -2014,6 +2042,6 @@ describe("hasFields", () => {
     }),
   );
 } finally {
-  await runtime.dispose();
+  await disposeRuntime();
   await rm(folder, { recursive: true, force: true });
 }

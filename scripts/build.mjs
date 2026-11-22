@@ -1,9 +1,22 @@
 import { mkdir, cp, readFile, readdir } from "node:fs/promises";
 import { build } from "esbuild";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve as absolutePath } from "node:path";
+import { tmpdir } from "node:os";
 import { assertPublicBundle } from "./public-bundle.mjs";
 
+const coverageOutput = process.argv[2];
+if (
+  coverageOutput &&
+  (coverageOutput !== process.env.BIST_TEST_COVERAGE ||
+    !/^bist-coverage-[\w-]+$/u.test(basename(coverageOutput)) ||
+    dirname(absolutePath(coverageOutput)) !== absolutePath(tmpdir()))
+) {
+  throw new Error("Use npm run test:coverage to build the isolated test Worker.");
+}
+const instrumentation = coverageOutput
+  ? [(await import("./coverage-instrument.mjs")).coveragePlugin]
+  : [];
 const english = JSON.parse(await readFile("src/locales/en.json", "utf8"));
 const htmlEscapes = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
@@ -27,16 +40,18 @@ for (const file of ["test.d.ts", "assert.d.ts", "assert/strict.d.ts"]) {
     "utf8",
   );
 }
-await mkdir("dist/.openai", { recursive: true });
-try {
-  await cp(".openai/hosting.json", "dist/.openai/hosting.json");
-} catch (error) {
-  if (error.code !== "ENOENT") {
-    throw error;
+if (!coverageOutput) {
+  await mkdir("dist/.openai", { recursive: true });
+  try {
+    await cp(".openai/hosting.json", "dist/.openai/hosting.json");
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+    await cp(".openai/hosting.example.json", "dist/.openai/hosting.json");
   }
-  await cp(".openai/hosting.example.json", "dist/.openai/hosting.json");
+  await cp("drizzle", "dist/.openai/drizzle", { recursive: true });
 }
-await cp("drizzle", "dist/.openai/drizzle", { recursive: true });
 const client = await build({
   entryPoints: ["src/browser.js"],
   bundle: true,
@@ -44,17 +59,36 @@ const client = await build({
   format: "esm",
   platform: "browser",
   target: "es2022",
-  minify: true,
+  minify: !coverageOutput,
+  plugins: instrumentation,
 });
-assertPublicBundle(client.outputFiles[0].text);
+if (!coverageOutput) {
+  assertPublicBundle(client.outputFiles[0].text);
+}
 await build({
-  entryPoints: ["src/index.ts"],
-  outfile: "dist/server/index.js",
+  ...(coverageOutput
+    ? {
+        stdin: {
+          resolveDir: process.cwd(),
+          contents: `
+            import app from "./src/index.ts";
+            export default {
+              fetch(request, env) {
+                if (new URL(request.url).pathname === "/__bist_test_coverage") {
+                  return Response.json(globalThis.__coverage__);
+                }
+                return app.fetch(request, env);
+              }
+            };`,
+        },
+      }
+    : { entryPoints: ["src/index.ts"] }),
+  outfile: coverageOutput ? join(coverageOutput, "worker.js") : "dist/server/index.js",
   bundle: true,
   format: "esm",
   platform: "browser",
   target: "es2022",
-  minify: true,
+  minify: !coverageOutput,
   external: [
     "fs",
     "path",
@@ -67,6 +101,7 @@ await build({
   ],
   loader: { ".html": "text", ".css": "text", ".md": "text" },
   plugins: [
+    ...instrumentation,
     {
       name: "cookbook-bundles",
       /**
@@ -142,4 +177,6 @@ async function rejectSourceMaps(directory) {
     }
   }
 }
-await rejectSourceMaps("dist");
+if (!coverageOutput) {
+  await rejectSourceMaps("dist");
+}
