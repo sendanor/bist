@@ -127,6 +127,8 @@ const matchingSnapshot = `
     AND (code_hash = ? OR documentation_hash = ? OR instructions_hash = ?)
 `;
 
+const visibleLlmWarnings = "CASE WHEN author = ? OR ? THEN llm_warnings ELSE '[]' END";
+
 class DuplicateCheck {
   /**
    * Record the fingerprints and policy needed for duplicate checks.
@@ -344,12 +346,14 @@ export class RequestError extends Error {
    * @param status The HTTP status for this failure.
    * @param code The machine-readable code for an acknowledgeable warning.
    * @param receipt Proof that the review findings match this submission.
+   * @param warnings File-specific findings the submitter must review before acknowledging.
    */
   constructor(
     message: string,
     public status = 400,
     public code?: "duplicate_warning" | "llm_warning",
     public receipt?: string,
+    public readonly warnings?: readonly LlmFinding[],
   ) {
     super(message);
   }
@@ -1027,13 +1031,16 @@ export class Cookbook {
     const parent = replace || base;
     const previous = parent
       ? await this.sql(
-          `SELECT file_names, files, llm_warnings FROM revisions WHERE id = ? AND slug = ?
+          `SELECT file_names, files, edit_version, ${visibleLlmWarnings} AS llm_warnings
+           FROM revisions WHERE id = ? AND slug = ?
        AND (state = 'published' OR (state IN ('pending','approved','changes') AND (author = ? OR ?)))`,
+          this.user.id,
+          this.user.maintainer,
           parent,
           slug,
           this.user.id,
           this.user.maintainer,
-        ).first<Pick<Revision, "file_names" | "files" | "llm_warnings">>()
+        ).first<Pick<Revision, "file_names" | "files" | "llm_warnings" | "edit_version">>()
       : null;
     const { files, fileNames, warnings } = await this.normalizeSubmission(
       input.files,
@@ -1061,7 +1068,16 @@ export class Cookbook {
     const reviewed = review
       ? await review({
           actor: this.user.id,
-          intent: [slug, base, replace, editVersion],
+          intent: [
+            slug,
+            base,
+            replace,
+            editVersion,
+            title,
+            summary,
+            payload.tags,
+            payload.fileNames,
+          ],
           files,
           previous: decodeFiles(previous?.files ?? null, parts),
           previousWarnings: decodeLlmFindings(previous?.llm_warnings ?? null),
@@ -1117,7 +1133,8 @@ export class Cookbook {
         SELECT ?,r.slug,?,?,?,?,?,?,?,?,?,?,?,?,1 FROM recipes r WHERE r.slug = ? AND NOT EXISTS (${matchingSnapshot}) AND (
           (? IS NULL AND r.live IS NULL AND (r.owner = ? OR ?) AND NOT EXISTS
             (SELECT 1 FROM revisions WHERE slug = r.slug AND state != 'removed'))
-          OR EXISTS (SELECT 1 FROM revisions p WHERE p.id = ? AND p.slug = r.slug AND
+          OR EXISTS (SELECT 1 FROM revisions p WHERE p.id = ? AND p.slug = r.slug
+            AND p.edit_version = ? AND (${visibleLlmWarnings}) = ? AND
             (p.state = 'published' OR (p.state IN ('pending','approved','changes') AND (p.author = ? OR ?)))))`,
         id,
         this.user.id,
@@ -1135,6 +1152,10 @@ export class Cookbook {
         this.user.id,
         this.user.maintainer,
         base,
+        previous?.edit_version ?? null,
+        this.user.id,
+        this.user.maintainer,
+        previous?.llm_warnings ?? "[]",
         this.user.id,
         this.user.maintainer,
       ),

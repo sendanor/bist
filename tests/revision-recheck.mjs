@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { correctedReadme, expectMcpWarnings, submitOverMcp } from "./mcp-submission-warnings.mjs";
 
 /** Criterion identifying positive and mixed responses from the simulated review provider. */
 export const recheckCriterion = "The file should name something to use.";
@@ -13,7 +14,10 @@ let beforeFixtureReply;
  * @param body OpenAI Responses request from the Worker under test.
  */
 export async function reviewStoredFixture(body) {
-  const expected = { documentation: "Use this public recipe.", instructions: "Unselected text." };
+  const expected = {
+    documentation: "Use this public recipe.\n",
+    instructions: "Unselected text.\n",
+  };
   const files = JSON.parse(body.input[0].content);
   const results = files.map(({ part, content }) => {
     if (body.instructions.includes(exampleCriterion)) {
@@ -47,9 +51,13 @@ export async function verifyDraftRecheck(dispatch, tool, submission, draft) {
   const policy = await (await dispatch(settings, "maintainer")).json();
   const rules = {
     documentation: { mode: "error", instruction: recheckCriterion + " " + exampleCriterion },
+    instructions: { mode: "error", instruction: recheckCriterion },
   };
   assert.equal((await dispatch(settings, "maintainer", { ...policy, rules })).status, 200);
   const target = { slug: draft.slug, revision: draft.id };
+  const edit = { ...submission, replace: draft.id, editVersion: draft.editVersion };
+  const metadata = { ...edit, title: "A new title" };
+  const earlier = await expectMcpWarnings(dispatch, metadata, [nextStep]);
   const recheck = await dispatch("/api/review/recheck", "maintainer", {
     ...target,
     editVersion: draft.editVersion,
@@ -65,19 +73,39 @@ export async function verifyDraftRecheck(dispatch, tool, submission, draft) {
     ...draft,
     llmWarnings: savedWarnings,
   });
-  const edit = { ...submission, replace: draft.id, editVersion: draft.editVersion };
-  const metadata = await dispatch("/api/submit", "author", { ...edit, title: "A new title" });
-  assert.equal(metadata.status, 200);
+  const reviewReceipt = await expectMcpWarnings(
+    dispatch,
+    { ...metadata, reviewReceipt: earlier },
+    savedWarnings,
+  );
+  assert.notEqual(reviewReceipt, earlier);
+  const blocked = await submitOverMcp(dispatch, {
+    ...metadata,
+    files: { ...submission.files, instructions: "Unselected text." },
+    reviewReceipt,
+  });
+  assert.equal(blocked.isError, true);
+  assert.match(
+    blocked.content[0].text,
+    /LLM review blocked[\s\S]*instructions: Name something to use\./u,
+  );
+  assert.ok(blocked.content[0].text.includes("Advisory warnings"));
+  for (const finding of savedWarnings) {
+    assert.ok(blocked.content[0].text.includes(finding.reason));
+  }
+  assert.equal(blocked.structuredContent?.reviewReceipt, undefined);
+  assert.equal((await tool("get_recipe", target, "author")).editVersion, draft.editVersion);
+  const { editVersion } = await tool("submit_recipe", { ...metadata, reviewReceipt });
   assert.deepEqual((await tool("get_recipe", target, "author")).llmWarnings, savedWarnings);
-  const { editVersion } = await metadata.json();
-  /** Remove the reviewed file after the next recheck reads it and before its findings arrive. */
+  /** Correct the reviewed file over MCP after a recheck reads the old edit. */
   beforeFixtureReply = async () => {
-    const replacement = await dispatch("/api/submit", "author", {
+    assert.equal((await dispatch(settings, "maintainer", policy)).status, 200);
+    const replacement = await tool("submit_recipe", {
       ...edit,
       editVersion,
-      files: { instructions: "Follow the revised recipe instructions." },
+      files: { documentation: correctedReadme },
     });
-    assert.equal(replacement.status, 200);
+    assert.equal(replacement.editVersion, editVersion + 1);
   };
   try {
     const stale = await dispatch("/api/review/recheck", "maintainer", { ...target, editVersion });
@@ -178,4 +206,32 @@ export async function verifyRevisionRecheck(dispatch, target, calls) {
   const reader = await dispatch(detail, "reader");
   assert.equal(reader.status, 200);
   assert.equal((await reader.json()).llmWarnings, undefined);
+  const proposal = {
+    slug: original.slug,
+    base: original.id,
+    title: "Adapt the published recipe",
+    summary: original.summary,
+    files: original.files,
+    allowDuplicates: true,
+  };
+  const authorReceipt = await expectMcpWarnings(dispatch, proposal, savedWarnings, "author");
+  const maintainerReceipt = await expectMcpWarnings(
+    dispatch,
+    {
+      ...proposal,
+      reviewReceipt: authorReceipt,
+    },
+    savedWarnings,
+    "maintainer",
+  );
+  assert.notEqual(maintainerReceipt, authorReceipt);
+  const publicChild = await submitOverMcp(dispatch, proposal, "reader");
+  assert.equal(publicChild.isError, undefined, publicChild.content[0].text);
+  const child = JSON.parse(publicChild.content[0].text);
+  const childView = await dispatch(
+    "/api/recipe?" + new URLSearchParams({ slug: child.slug, revision: child.id }),
+    "reader",
+  );
+  assert.equal(childView.status, 200);
+  assert.equal((await childView.json()).llmWarnings, undefined);
 }

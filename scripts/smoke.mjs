@@ -2,6 +2,12 @@ import { repositoryRecipe } from "./repository-recipes.mjs";
 import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
 import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
 import {
+  correctedReadme,
+  expectMcpWarnings,
+  submitOverMcp,
+  verifyMcpAcknowledgement,
+} from "../tests/mcp-submission-warnings.mjs";
+import {
   recheckCriterion,
   reviewStoredFixture,
   verifyDraftRecheck,
@@ -314,6 +320,10 @@ try {
     mcpSelection.enabledTools,
   );
   assert.equal((await dispatch(mcpPath, "maintainer", mcpSettings)).status, 200);
+  const catalog = (await (await dispatch("/mcp", "author", listMcp)).json()).result.tools;
+  const submitDefinition = catalog.find(({ name }) => name === "submit_recipe");
+  assert.equal(submitDefinition.inputSchema.properties.reviewReceipt.type, "string");
+  assert.match(submitDefinition.description, /ask whether to fix/u);
   assert.equal((await dispatch("/assistant", null)).status, 200);
   assert.equal((await dispatch("/api/assistant", null)).status, 401);
   assert.equal(
@@ -1408,8 +1418,8 @@ describe("hasFields", () => {
     .prepare("UPDATE revisions SET files = ? WHERE id = ?")
     .bind(
       JSON.stringify({
-        documentation: "Use this public recipe.",
-        instructions: "Unselected text.",
+        documentation: "Use this public recipe.\n",
+        instructions: "Unselected text.\n",
       }),
       sampleIds.at(-1),
     )
@@ -1541,7 +1551,12 @@ describe("hasFields", () => {
         }
         const text = JSON.stringify({
           results: [
-            { part: "documentation", acceptable: false, reason: "Add one concrete next step." },
+            {
+              part: "documentation",
+              acceptable:
+                JSON.parse(body.input[0].content)[0].content.trimEnd() === correctedReadme,
+              reason: "Add one concrete next step.",
+            },
           ],
         });
         return Response.json({
@@ -1666,7 +1681,7 @@ describe("hasFields", () => {
         };
       } else if (inferenceCalls === 4) {
         assert.deepEqual(JSON.parse(last.output).parts, {
-          documentation: { text: "Use this public recipe.", truncated: false },
+          documentation: { text: "Use this public recipe.\n", truncated: false },
         });
         output = {
           type: "message",
@@ -1811,15 +1826,25 @@ describe("hasFields", () => {
   const { code, reviewReceipt } = await reviewWarning.json();
   assert.equal(code, "llm_warning");
   assert.match(reviewReceipt, /^[a-f0-9-]{36}$/u);
-  const accepted = await dispatch("/api/submit", "author", { ...checkedRecipe, reviewReceipt });
-  assert.equal(accepted.status, 201);
-  const acceptedRecipe = await accepted.json();
+  const expectedWarnings = [{ part: "documentation", reason: "Add one concrete next step." }];
+  const acceptedRecipe = await verifyMcpAcknowledgement(
+    dispatch,
+    await runtime.getD1Database("DB"),
+    checkedRecipe,
+    expectedWarnings,
+    reviewReceipt,
+  );
   assert.equal(llmReviewCalls, 2);
-  const edited = await dispatch("/api/submit", "author", {
+  const metadataEditWithWarning = {
     ...checkedRecipe,
     title: "Updated title without new prose",
     replace: acceptedRecipe.id,
     editVersion: acceptedRecipe.editVersion,
+  };
+  const editReceipt = await expectMcpWarnings(dispatch, metadataEditWithWarning, expectedWarnings);
+  const edited = await dispatch("/api/submit", "author", {
+    ...metadataEditWithWarning,
+    reviewReceipt: editReceipt,
   });
   assert.equal(edited.status, 200);
   assert.equal(llmReviewCalls, 2);
@@ -1829,9 +1854,7 @@ describe("hasFields", () => {
     { slug: checkedRecipe.slug, revision: acceptedRecipe.id },
     "maintainer",
   );
-  assert.deepEqual(reviewed.llmWarnings, [
-    { part: "documentation", reason: "Add one concrete next step." },
-  ]);
+  assert.deepEqual(reviewed.llmWarnings, expectedWarnings);
   assert.equal(
     (
       await dispatch(llmReviewPath, "maintainer", {
@@ -1843,24 +1866,16 @@ describe("hasFields", () => {
     ).status,
     200,
   );
-  const blockedAttempt = await dispatch("/mcp", "author", {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/call",
-    params: {
-      name: "submit_recipe",
-      arguments: {
-        ...checkedRecipe,
-        files: { documentation: "Review this materially different documentation snapshot." },
-        replace: acceptedRecipe.id,
-        editVersion: (await edited.json()).editVersion,
-        reviewReceipt,
-      },
-    },
+  const blockedResult = await submitOverMcp(dispatch, {
+    ...checkedRecipe,
+    files: { documentation: "Review this materially different documentation snapshot." },
+    replace: acceptedRecipe.id,
+    editVersion: (await edited.json()).editVersion,
+    reviewReceipt: editReceipt,
   });
-  const blockedResult = (await blockedAttempt.json()).result;
   assert.equal(blockedResult.isError, true);
   assert.match(blockedResult.content[0].text, /LLM review blocked/u);
+  assert.equal(blockedResult.structuredContent?.reviewReceipt, undefined);
   assert.equal(llmReviewCalls, 3);
   await verifyDraftRecheck(dispatch, tool, checkedRecipe, reviewed);
   await verifyRevisionRecheck(

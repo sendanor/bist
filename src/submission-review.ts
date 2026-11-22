@@ -14,7 +14,7 @@ import {
   type SubmissionSnapshot,
 } from "./store";
 
-/** One cached result for a particular author, file snapshot, and policy. */
+/** A short-lived receipt for an evaluation or a submission's warning list. */
 interface ReviewReceipt {
   readonly receipt: string;
   readonly warnings: string;
@@ -149,37 +149,18 @@ export async function reviewSavedFiles(
 }
 
 /**
- * Review new content, preserve unchanged findings and require explicit warning acknowledgement.
- * @param db The instance database binding.
- * @param encryptionKey Deployment key used to open the stored OpenAI credential.
- * @param candidate Normalized files and review context for the current authenticated author.
- * @throws {RequestError} If review is unavailable, blocks the submission, or needs acknowledgement.
+ * Reuse a recent result or store the first set of findings for a particular request.
+ * @param db Storage for expiring receipts shared by all Worker instances.
+ * @param key Serialized inputs identifying the operation, actor and evidence.
+ * @param collect Obtain the findings on a cache miss.
+ * @throws {RequestError} If the stored receipt cannot be retrieved.
  */
-export async function reviewSubmission(
+async function cachedReview(
   db: Database,
-  encryptionKey: string | undefined,
-  candidate: SubmissionSnapshot,
+  key: string,
+  collect: () => readonly LlmFinding[] | Promise<readonly LlmFinding[]>,
 ) {
-  const retained = candidate.previousWarnings.filter(
-    ({ part }) => candidate.files[part] && candidate.files[part] === candidate.previous[part],
-  );
-  const policy = await readLlmReviewPolicy(db);
-  const changed = reviewItems(policy, candidate.files, candidate.previous);
-  if (!policy.enabled || !changed.length) {
-    return retained;
-  }
-  const reviewer = await prepareReview(db, encryptionKey, policy);
-  const encoded = new TextEncoder().encode(
-    JSON.stringify([
-      candidate.actor,
-      candidate.intent,
-      changed,
-      reviewer.context,
-      policy.referenceQuery,
-      policy.referenceLibraryId,
-    ]),
-  );
-  const hash = await crypto.subtle.digest("SHA-256", encoded);
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   const digest = [...new Uint8Array(hash)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
@@ -190,7 +171,7 @@ export async function reviewSubmission(
     .bind(digest);
   let cached = await match.first<ReviewReceipt>();
   if (!cached) {
-    const findings = await reviewer.evaluate(candidate.actor, changed);
+    const findings = await collect();
     await db.batch([
       db.prepare("DELETE FROM llm_review_receipts WHERE expires <= unixepoch()"),
       db
@@ -205,14 +186,80 @@ export async function reviewSubmission(
     }
   }
 
-  const findings = decodeLlmFindings(cached.warnings);
-  const blocking = findings.some(({ part }) => policy.rules[part]?.mode === "error");
-  if (findings.length && (blocking || candidate.receipt !== cached.receipt)) {
-    const detail = findings.map(({ part, reason }) => part + ": " + reason).join("\n");
-    if (blocking) {
-      throw new RequestError("LLM review blocked this submission.\n" + detail, 422);
+  return cached;
+}
+
+/**
+ * Format each finding with its affected file part for clients that display plain text.
+ * @param findings Findings visible to this submitter.
+ */
+function findingDetails(findings: readonly LlmFinding[]) {
+  return findings.map(({ part, reason }) => part + ": " + reason).join("\n");
+}
+
+/**
+ * Review changed files and require acknowledgement of every warning carried by this submission.
+ * @param db The instance database binding.
+ * @param encryptionKey Deployment key used to open the stored OpenAI credential.
+ * @param candidate Normalized submission and the previous findings visible to its author.
+ * @throws {RequestError} If review is unavailable, blocks the submission, or needs acknowledgement.
+ */
+export async function reviewSubmission(
+  db: Database,
+  encryptionKey: string | undefined,
+  candidate: SubmissionSnapshot,
+) {
+  const warnings = candidate.previousWarnings.filter(
+    ({ part }) => candidate.files[part] && candidate.files[part] === candidate.previous[part],
+  );
+  const policy = await readLlmReviewPolicy(db);
+  const changed = policy.enabled ? reviewItems(policy, candidate.files, candidate.previous) : [];
+  let evaluationReceipt: string | null = null;
+  if (changed.length) {
+    const reviewer = await prepareReview(db, encryptionKey, policy);
+    const key = JSON.stringify([
+      "evaluation",
+      candidate.actor,
+      changed,
+      reviewer.context,
+      policy.referenceQuery,
+      policy.referenceLibraryId,
+    ]);
+    const evaluation = await cachedReview(db, key, () =>
+      reviewer.evaluate(candidate.actor, changed),
+    );
+    const findings = decodeLlmFindings(evaluation.warnings);
+    const blocking = findings.filter(({ part }) => policy.rules[part]?.mode === "error");
+    if (blocking.length) {
+      const advisory = [...warnings, ...findings.filter((finding) => !blocking.includes(finding))];
+      const details = ["LLM review blocked this submission.", findingDetails(blocking)];
+      if (advisory.length) {
+        details.push("Advisory warnings", findingDetails(advisory));
+      }
+      throw new RequestError(details.join("\n"), 422);
     }
-    throw new RequestError(detail, 409, "llm_warning", cached.receipt);
+    warnings.push(...findings);
+    evaluationReceipt = evaluation.receipt;
   }
-  return [...retained, ...findings] satisfies readonly LlmFinding[];
+  if (warnings.length) {
+    const key = JSON.stringify([
+      "acknowledgement",
+      candidate.actor,
+      candidate.intent,
+      candidate.files,
+      evaluationReceipt,
+      warnings,
+    ]);
+    const acknowledgement = await cachedReview(db, key, () => warnings);
+    if (candidate.receipt !== acknowledgement.receipt) {
+      throw new RequestError(
+        findingDetails(warnings),
+        409,
+        "llm_warning",
+        acknowledgement.receipt,
+        warnings,
+      );
+    }
+  }
+  return warnings;
 }

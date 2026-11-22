@@ -126,7 +126,7 @@ const tools = [
   ),
   tool(
     "submit_recipe",
-    "Submit one complete recipe snapshot for human review. Use base to create a new revision, or replace with the ID and editVersion of your unapproved revision to update it in place. Include all parts to retain. Any part can stand alone, including documentation or agent instructions.",
+    "Submit one complete recipe snapshot for human review. Use base for a new revision, or replace and editVersion to update your draft. Include all parts to keep. Any part can stand alone. On llm_warning, show the user every finding and ask whether to fix the files or submit with the warnings. Wait for their choice before retrying.",
     {
       slug: string,
       title: string,
@@ -141,8 +141,9 @@ const tools = [
       },
       reviewReceipt: {
         type: "string",
+        maxLength: 36,
         description:
-          "Acknowledge the LLM warnings by returning the receipt from the same submission.",
+          "Only after the user explicitly accepts the displayed LLM warnings, return this receipt with the same submission. Omit it when sending corrections.",
       },
       files: {
         type: "object",
@@ -387,10 +388,17 @@ async function mcp(request: Request, cookbook: Cookbook | null, env: Env) {
             type: "text",
             text:
               detail +
-              "\nRetry with the same files and reviewReceipt only after acknowledging these warnings.",
+              "\nShow these warnings to the user. Ask them to correct the files or explicitly approve submitting with all warnings. Wait for their decision. For corrections, omit the receipt. Only with approval, retry the same submit_recipe call with " +
+              JSON.stringify({ reviewReceipt: error.receipt }) +
+              ".",
           },
         ],
-        structuredContent: { code: error.code, error: detail, reviewReceipt: error.receipt },
+        structuredContent: {
+          code: error.code,
+          error: detail,
+          warnings: error.warnings,
+          reviewReceipt: error.receipt,
+        },
       });
     }
     return result({ isError: true, content: [{ type: "text", text: detail }] });
