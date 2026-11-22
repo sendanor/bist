@@ -16,7 +16,7 @@ import { Linter } from "eslint-linter-browserify";
 import type { Linter as ESLintConfig, SourceCode } from "eslint";
 import { analyze } from "@typescript-eslint/scope-manager";
 import { visitorKeys } from "@typescript-eslint/visitor-keys";
-import { bundledRules, defaultCodePolicy, type Policy } from "./code-policy";
+import { bundledRules, type Policy } from "./code-policy";
 import { normalizeStyles } from "./quality/css";
 import { defaultRecipeNames, virtualFiles } from "./quality/recipe-rules.js";
 import { checkRecipeTypes } from "./quality/recipe-types";
@@ -53,7 +53,7 @@ const extensions: Readonly<Record<Part, RegExp>> = {
 export function recipeFileNames(
   value: unknown,
   included: readonly Part[],
-  inherited: RecipeFileNames = {},
+  inherited: RecipeFileNames,
 ): RecipeFileNames {
   if (value !== undefined && !isRecord(value)) {
     throw new Error("Provide a fileNames object.");
@@ -105,9 +105,9 @@ function limitDiagnostics(messages: readonly string[]) {
  */
 export async function normalizeFiles(
   value: unknown,
-  policy: Policy = defaultCodePolicy,
-  requestedNames?: unknown,
-  inheritedNames?: RecipeFileNames,
+  policy: Policy,
+  requestedNames: unknown,
+  inheritedNames: RecipeFileNames,
 ) {
   const { blankLinesBetweenDeclarations, ...prettier } = policy.prettier;
   if (!isRecord(value)) {
@@ -233,9 +233,6 @@ export async function normalizeFiles(
       throw new Error(`${key} contains a prettier-ignore directive.`);
     }
     if (ast && linter) {
-      if (!Array.isArray(ast.tokens)) {
-        throw new Error("TypeScript lint tokens are unavailable.");
-      }
       // The legacy API runs rules with options validated by Code Cookbook
       // without compiling schemas with dynamic code generation in the Worker.
       const lintAst = ast;
