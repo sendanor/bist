@@ -1,15 +1,20 @@
 # Code Cookbook
 
-Code Cookbook, also called Bist, is a shared library of reusable code recipes and guides for
-software teams and coding agents. Save a small solution with its tests or usage notes, review it
-before sharing it, and retrieve the parts you need for another project.
+Code Cookbook, also called Bist, is a shared library for moving reusable code, ideas, architecture
+specifications, and agent instructions between ChatGPT chats and other AI tools. Save something
+you developed in a ChatGPT chat as a recipe, then retrieve it from Codex or another connected tool
+through the Model Context Protocol (MCP). You can also submit a recipe from another MCP client
+and bring it back into a ChatGPT chat.
 
-- Search published recipes by keyword or tag in the browser or through the Model Context
-  Protocol (MCP). Fetch only the parts you need.
-- Submit TypeScript, public interfaces, tests, CSS, documentation, or agent instructions. A guide
-  can consist of documentation or instructions alone.
-- Review a specific revision before publishing it. Maintainers can compare edits and leave private
-  comments on whole files or individual lines, including lines in Markdown files.
+Bist helps you review and improve recipes before others reuse them. On submission, configurable
+deterministic checks cover formatting, lint, types, CSS, and duplicates. When enabled and
+configured, review through the OpenAI API checks new or changed content against your written
+criteria. Maintainers can compare revisions and leave private comments on whole files or
+individual lines, including in Markdown, before approving and publishing a revision.
+
+A recipe can include code, interfaces, and tests, or consist entirely of documentation or agent
+instructions. Find published recipes by keyword or tag in the browser or over MCP, and fetch
+only the parts you need.
 
 ![The isRecord recipe in Code Cookbook with the sidebar, toolbar, documentation, source, and tests.](docs/is-record.jpg)
 
