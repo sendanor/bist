@@ -208,6 +208,18 @@ test("review rejects missing findings, empty reasons and unapproved lookups", as
     { status: 502 },
   );
   let lookups = 0;
+  let rounds = 0;
+  const validFinding = {
+    type: "message",
+    content: [
+      {
+        type: "output_text",
+        text: JSON.stringify({
+          results: [{ part: "documentation", acceptable: true, reason: "" }],
+        }),
+      },
+    ],
+  };
   await assert.rejects(
     runOpenAiReview(
       {
@@ -219,11 +231,16 @@ test("review rejects missing findings, empty reasons and unapproved lookups", as
         },
       },
       [item],
-      async () => Response.json({ status: "completed", output: [call] }),
+      async () =>
+        Response.json({
+          status: "completed",
+          output: ++rounds === 1 ? [call] : [validFinding, call],
+        }),
     ),
     { status: 502 },
   );
   assert.equal(lookups, 1);
+  assert.equal(rounds, 2);
 });
 
 test("review preserves rate limiting and rejects malformed or unfinished upstream responses", async () => {
