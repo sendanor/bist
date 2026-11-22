@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readJsonObject } from "../src/read-json-object.ts";
+import { it } from "node:test";
+import { JsonBodyError, readJsonObject } from "../src/read-json-object.ts";
 
 /**
  * Build a synthetic POST request for the JSON parser.
@@ -38,3 +39,71 @@ const streamed = new Request("https://example.test/", {
   duplex: "half",
 } as RequestInit);
 assert.deepEqual(await readJsonObject(streamed, bytes.length), { city: "Tampere", word: "yö" });
+
+it("validates byte limits before consuming the body", async () => {
+  for (const limit of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    const input = request("{}");
+    await assert.rejects(readJsonObject(input, limit), RangeError);
+    assert.equal(input.bodyUsed, false);
+  }
+});
+
+it("rejects a missing media type or request body", async () => {
+  const input = new Request("https://example.test/");
+  await assert.rejects(readJsonObject(input, 10), { status: 415 });
+  const { headers } = request("{}");
+  await assert.rejects(readJsonObject({ headers, body: null }, 10), {
+    name: "JsonBodyError",
+    message: "Request body required.",
+    status: 400,
+  });
+});
+
+it("does not consume a stream already locked by another reader", async () => {
+  const input = request("{}");
+  assert.ok(input.body);
+  const reader = input.body.getReader();
+  try {
+    await assert.rejects(readJsonObject(input, 10), { message: "Request body is unavailable." });
+    assert.equal(new TextDecoder().decode((await reader.read()).value), "{}");
+  } finally {
+    reader.releaseLock();
+  }
+});
+
+it("releases the reader and preserves the byte limit error when cancellation fails", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    /**
+     * Supply an oversized body and keep the stream open for cancellation.
+     * @param controller Stream controller that enqueues the input.
+     */
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("{}"));
+    },
+
+    /**
+     * Emulate a transport that fails during cancellation.
+     * @throws {Error} Always, to verify the parser preserves its original failure.
+     */
+    cancel() {
+      cancelled = true;
+      throw new Error("Transport cancellation failed.");
+    },
+  });
+  const { headers } = request("{}");
+  await assert.rejects(
+    readJsonObject({ headers, body }, 1),
+    new JsonBodyError("Request exceeds 1 bytes.", 413),
+  );
+  assert.equal(cancelled, true);
+  assert.equal(body.locked, false);
+});
+
+it("rejects malformed JSON and an incomplete UTF-8 sequence", async () => {
+  for (const value of ["{", new Uint8Array([0xc3])]) {
+    const input = request(value);
+    await assert.rejects(readJsonObject(input, 10), { message: "Invalid JSON body." });
+    assert.equal(input.body?.locked, false);
+  }
+});

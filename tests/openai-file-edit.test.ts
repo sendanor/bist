@@ -63,6 +63,7 @@ describe("selected-file editing tools", () => {
     "another tool": [{ ...replacement, name: "save_recipe" }],
     "parallel writes": [replacement, replacement],
     "malformed JSON": [{ ...replacement, arguments: "[" }],
+    "valid JSON with a non-object tool argument": [{ ...replacement, arguments: "[]" }],
     "a partial write": [{ ...replacement, status: "incomplete" }],
     "a blank replacement": [{ ...replacement, arguments: '{"content":" "}' }],
     "a multibyte file above the byte limit": [

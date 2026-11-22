@@ -205,6 +205,26 @@ test("duplication requires 80 tokens on at least 12 lines and does not match ove
   );
 });
 
+test("duplicate matching stops at its result limit and rejects short prefix matches", () => {
+  const tokens = Array.from({ length: 96 }, (_, index) => ({
+    value: String(index),
+    line: Math.floor(index / 8) + 1,
+    column: (index % 8) + 1,
+  }));
+  const uniqueTail = tokens.map((token, index) =>
+    index < 80 ? token : { ...token, value: "other-" + token.value },
+  );
+  const files = [
+    { name: "first.js", tokens },
+    { name: "similar.ts", tokens: uniqueTail },
+  ];
+  assert.deepEqual(findDuplicates(files), []);
+  files.push({ name: "second.ts", tokens }, { name: "third.ts", tokens });
+  const [first] = findDuplicates(files);
+  assert.equal(first.length, 96);
+  assert.deepEqual(findDuplicates(files, 1), [first]);
+});
+
 test("public bundle check permits UI settings and rejects private bindings and source maps", () => {
   assert.doesNotThrow(() => assertPublicBundle('const settings = "Code Policy";'));
   assert.throws(
