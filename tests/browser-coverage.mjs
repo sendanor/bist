@@ -988,6 +988,10 @@ async function verifyRecheckFeedback(window) {
         );
       }
       await eventually(() => pattern.test(recheck.textContent), "recheck summary updated");
+      if (reports.length) {
+        const filename = docs.querySelector(".recipe-filename").textContent;
+        assert.ok(recheck.textContent.includes("Checked " + filename + "."));
+      }
       const warning = docs.querySelector(".file-warnings");
       assert.equal(warning.hidden, reports.length !== 2);
       if (!warning.hidden) {
@@ -1103,6 +1107,10 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   assert.ok(menu.contains(document.activeElement));
   menu.firstElementChild.dispatchEvent(
     new window.FocusEvent("focusout", { relatedTarget: trigger, bubbles: true }),
+  );
+  assert.equal(menu.hidden, false);
+  menu.firstElementChild.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
   );
   assert.equal(menu.hidden, false);
   trigger.click();
@@ -1913,7 +1921,7 @@ async function verifyAuthorRemoval(window, dispatch) {
   );
   const params = new URLSearchParams({ slug, revision });
   assert.equal((await dispatch("/api/recipe?" + params, "browser-author")).status, 404);
-  window.history.replaceState(null, "", "/assistant?query=compatibility");
+  window.history.replaceState(null, "", "/assi%73tant?query=compatibility");
   window.dispatchEvent(new window.PopStateEvent("popstate"));
   await eventually(
     () => document.querySelector("#view h1")?.textContent === "Recipe library",
@@ -1928,8 +1936,9 @@ async function verifyAuthorRemoval(window, dispatch) {
  * Publish and display a code-only recipe without advertising an instructions download.
  * @param window Maintainer's browser used to read the public revision.
  * @param dispatch Test transport used to submit and publish the recipe.
+ * @param directory Coverage output directory for the separate public reader.
  */
-async function verifySourceOnlyPublication(window, dispatch) {
+async function verifySourceOnlyPublication(window, dispatch, directory) {
   const recipe = {
     slug: "browser-source-only-fixture",
     title: "Source-only browser recipe",
@@ -1948,7 +1957,20 @@ async function verifySourceOnlyPublication(window, dispatch) {
     });
     assert.equal(response.status, 200, action);
   }
-  window.history.pushState(null, "", "/recipe/library/" + recipe.slug + "/" + id);
+  const feedback = "Private reviewer feedback on the code-only recipe.";
+  const comment = await dispatch(
+    "/api/comment",
+    "maintainer",
+    { slug: recipe.slug, revision: id, editVersion, part: "source", line: null, body: feedback },
+    {
+      "oai-authenticated-user-id": "unnamed-reviewer-fixture",
+      "oai-authenticated-user-full-name": "%E2%80%8B",
+    },
+  );
+  assert.equal(comment.status, 201);
+  assert.equal((await comment.json()).authorName, null);
+  const path = "/recipe/library/" + recipe.slug + "/" + id;
+  window.history.pushState(null, "", path);
   window.dispatchEvent(new window.PopStateEvent("popstate"));
   const view = window.document.querySelector("#view");
   await eventually(
@@ -1960,6 +1982,30 @@ async function verifySourceOnlyPublication(window, dispatch) {
     /defaultRecipeBatchSize/u,
   );
   assert.equal(view.querySelector('.recipe-byline a[href^="/api/skill"]'), null);
+  assert.equal(view.querySelector(".review-comment strong").textContent, "Reviewer");
+  assert.ok(view.textContent.includes(feedback));
+  const reader = await openPage(dispatch, path, "reader");
+  try {
+    const publicView = reader.document.querySelector("#view");
+    assert.equal(publicView.querySelector("h1").textContent, recipe.title);
+    assert.match(
+      publicView.querySelector("code.line-value").textContent,
+      /defaultRecipeBatchSize/u,
+    );
+    assert.equal(publicView.querySelector(".review-comment"), null);
+    assert.ok(!publicView.textContent.includes(feedback));
+    reader.document.querySelector(".revision-trigger").click();
+    assert.equal(
+      reader.document.querySelector(".revision-menu a").textContent.trim(),
+      "Propose an improvement",
+    );
+    await writeFile(
+      join(directory, "browser-public-reader.json"),
+      JSON.stringify(reader.__coverage__),
+    );
+  } finally {
+    reader.close();
+  }
 }
 
 /**
@@ -2012,7 +2058,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
     await verifyReviewerComments(reviewer);
     await verifyReviewDecisions(reviewer, dispatch, draft);
     await verifyHistoricalComments(reviewer, dispatch);
-    await verifySourceOnlyPublication(reviewer, dispatch);
+    await verifySourceOnlyPublication(reviewer, dispatch, directory);
     await writeFile(
       join(directory, "browser-reviewer.json"),
       JSON.stringify(reviewer.__coverage__),

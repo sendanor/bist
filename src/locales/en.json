@@ -90,7 +90,6 @@
   "improve-recipe": "Improve recipe",
   "inspect-changes-record-a-decision-and-publish-approved": "Inspect changes, record a decision, and publish approved revisions.",
   "jsdoc-required": "JSDoc is required for named callables in source, interface, and tests.",
-  "library": "library",
   "line": "Line",
   "llm-recheck-action": "Re-run LLM review",
   "llm-recheck-clean": "This check found no warnings.",

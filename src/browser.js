@@ -106,7 +106,7 @@ function buttonLink(text, href, style = "") {
  * @param value The initial control value.
  * @param textarea Whether the field accepts multiline content.
  */
-function field(name, title, options = {}, value = "", textarea = false) {
+function field(name, title, options, value = "", textarea = false) {
   const control = el(textarea ? "textarea" : "input", { name, ...options });
   control.value = value;
   return el("label", {}, title, control);
@@ -1510,7 +1510,7 @@ function revisionRecheck(recipe, showWarnings) {
       status.textContent = report.warnings.length
         ? t("llm-recheck-warnings")
         : t("llm-recheck-clean");
-      const names = report.checkedParts.map((part) => recipe.fileNames?.[part] ?? parts[part]);
+      const names = report.checkedParts.map((part) => recipe.fileNames[part]);
       details.append(
         el(
           "p",
@@ -2820,26 +2820,28 @@ async function settingsPage(page) {
 
 /** Render the current page path and discard stale asynchronous results. */
 async function render() {
-  if (location.pathname === "/assistant") {
+  let route = parsePagePath(location.pathname);
+  if (route.page === "assistant") {
     history.replaceState(history.state, "", "/library" + location.search);
+    route = { page: "library", section: "library" };
     if (maintainer) {
       void openAssistant();
     }
   }
   const current = ++renderId;
   toolbar.replaceChildren();
-  const { page, section, slug, revision } = parsePagePath(location.pathname);
+  const { page, section, slug, revision } = route;
   const reading = page === "recipe";
   topBar.classList.toggle("recipe-top", reading);
   outlet.classList.toggle("recipe-view", reading);
   revisionBack.hidden = !reading;
   if (reading) {
     revisionBack.href = listingPaths.get(section) ?? "/" + section;
-    const backLabel = t("back-to") + (labels[section] ?? t("library")).toLowerCase();
+    const backLabel = t("back-to") + labels[section].toLowerCase();
     revisionBack.setAttribute("aria-label", backLabel);
     revisionBack.title = backLabel;
   }
-  locationLabel.textContent = labels[section] ?? labels.library;
+  locationLabel.textContent = labels[section];
   for (const link of document.querySelectorAll(".rail nav a")) {
     if (link.pathname === "/" + section) {
       link.setAttribute("aria-current", "page");
