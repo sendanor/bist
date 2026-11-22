@@ -19,7 +19,7 @@ import { visitorKeys } from "@typescript-eslint/visitor-keys";
 import { bundledRules, type Policy } from "./code-policy";
 import { normalizeStyles } from "./quality/css";
 import { defaultRecipeNames, virtualFiles } from "./quality/recipe-rules.js";
-import { checkRecipeTypes } from "./quality/recipe-types";
+import { checkRecipeTypes, type RecipeTypeFile } from "./quality/recipe-types";
 import { spaceDeclarations } from "./quality/declaration-spacing.js";
 
 export const parts = [
@@ -116,7 +116,7 @@ export async function normalizeFiles(
   const result: Partial<Record<Part, string>> = {};
   const warnings: string[] = [];
   const errors: string[] = [];
-  const sources: Partial<Record<keyof typeof virtualFiles, string>> = {};
+  const sources: RecipeTypeFile[] = [];
   for (const [key, content] of Object.entries(value)) {
     if (!parts.some((part) => part === key) || !isRecipeFileText(content)) {
       throw new Error("Use supported file parts of at most 12 KB each.");
@@ -169,9 +169,9 @@ export async function normalizeFiles(
       continue;
     }
     const part = key as keyof typeof virtualFiles;
-    const filename = fileNames[part] ?? virtualFiles[part];
+    const filename = fileNames[part]!;
     const rules = { ...policy.eslint, ...policy.overrides[part] };
-    sources[part] = content;
+    sources.push({ part, name: filename, content });
     let formatted: string;
     let lintText = content;
     let hasFormatIgnore = false;
@@ -289,7 +289,7 @@ export async function normalizeFiles(
   }
   if (hasTypeScript && policy.quality.typeCheck !== "off" && errors.length === 0) {
     const target = policy.quality.typeCheck === "error" ? errors : warnings;
-    target.push(...checkRecipeTypes(sources, 20, fileNames));
+    target.push(...checkRecipeTypes(sources, 20));
   }
   if (policy.quality.warningsAsErrors) {
     errors.push(...warnings);

@@ -2,7 +2,12 @@ import ts from "typescript";
 import libraries from "cookbook:typescript-libraries";
 import { resolveRecipePart, virtualFiles } from "./recipe-rules.js";
 
-type RecipeSources = Partial<Record<keyof typeof virtualFiles, string>>;
+/** One authored code part and its validated filename in a recipe. */
+export interface RecipeTypeFile {
+  readonly part: keyof typeof virtualFiles;
+  readonly name: string;
+  readonly content: string;
+}
 
 const options: ts.CompilerOptions = {
   strict: true,
@@ -41,39 +46,29 @@ const extensions: Readonly<Record<string, ts.Extension>> = {
 
 /**
  * Map the chosen filename to the TypeScript compiler’s module extension.
- * @param filename The virtual path of the resolved recipe file.
+ * @param filename The resolved recipe filename, validated against the supported suffixes.
  */
 function recipeExtension(filename: string) {
-  return extensions[filename.match(/(?:\.d)?\.[a-z]+$/u)?.[0] ?? ""] ?? ts.Extension.Ts;
+  const [suffix] = filename.match(/(?:\.d\.[cm]?ts|\.[cm]?[jt]s|\.[jt]sx)$/u)!;
+  return extensions[suffix];
 }
 
 /**
  * Check a recipe snapshot using only the pinned standard libraries and its submitted files.
- * @param sources The authored TypeScript parts supplied to the virtual compiler.
+ * @param sources The authored code parts and their effective filenames.
  * @param limit The diagnostic limit enforced for a single snapshot.
- * @param names Effective names of the submitted code parts.
  */
-export function checkRecipeTypes(
-  sources: RecipeSources,
-  limit: number,
-  names: Partial<Record<keyof typeof virtualFiles, string>> = {},
-): string[] {
-  const files = new Map<string, string>();
+export function checkRecipeTypes(sources: readonly RecipeTypeFile[], limit: number): string[] {
+  const files = new Map(sources.map((file) => ["/recipe/" + file.name, file]));
+  const names = Object.fromEntries(sources.map(({ part, name }) => [part, name]));
   const parsedFiles = new Map<string, ts.SourceFile>();
-  for (const part of Object.keys(virtualFiles) as (keyof typeof virtualFiles)[]) {
-    const text = sources[part];
-    if (text !== undefined) {
-      const name = "/recipe/" + (names[part] ?? virtualFiles[part]);
-      files.set(name, text);
-    }
-  }
 
   /**
    * Read authored or pinned declarations without host filesystem access.
    * @param name The virtual filename requested by the compiler.
    */
   function readFile(name: string) {
-    return files.get(name) ?? libraries[name];
+    return files.get(name)?.content ?? libraries[name];
   }
 
   const host: ts.CompilerHost = {
@@ -122,21 +117,19 @@ export function checkRecipeTypes(
     resolveModuleNames(specifiers) {
       return specifiers.map((name) => {
         const part = resolveRecipePart(name, names);
-        if (!part) {
+        const filename = part && names[part];
+        if (!filename) {
           return undefined;
         }
-        const path = "/recipe/" + (names[part] ?? virtualFiles[part]);
-        return files.has(path)
-          ? {
-              resolvedFileName: path,
-              extension: recipeExtension(path),
-            }
-          : undefined;
+        return {
+          resolvedFileName: "/recipe/" + filename,
+          extension: recipeExtension(filename),
+        };
       });
     },
   };
   const roots = Array.from(files.keys());
-  if (sources.tests !== undefined) {
+  if (names.tests !== undefined) {
     roots.push(...testLibraries);
   }
   const program = ts.createProgram(roots, { ...options, skipLibCheck: true }, host);
@@ -146,11 +139,7 @@ export function checkRecipeTypes(
   return diagnostics.slice(0, limit).map((entry) => {
     let location = "recipe";
     if (entry.file && entry.start !== undefined) {
-      const part = Object.entries(virtualFiles).find(
-        ([part, filename]) =>
-          "/recipe/" + (names[part as keyof typeof virtualFiles] ?? filename) ===
-          entry.file?.fileName,
-      )?.[0];
+      const part = files.get(entry.file.fileName)?.part;
       const { line, character } = entry.file.getLineAndCharacterOfPosition(entry.start);
       location = `${part ?? entry.file.fileName}:${line + 1}:${character + 1}`;
     }

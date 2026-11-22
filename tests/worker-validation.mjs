@@ -298,6 +298,42 @@ async function verifyVirtualModules(dispatch) {
       assert.match(error, /^source:1:\d+ .*TS2307/u);
       assert.ok(error.includes(specifier));
     }
+    for (const [typescript, javascript] of [
+      ["mts", "mjs"],
+      ["cts", "cjs"],
+    ]) {
+      const response = await dispatch("/api/submit", "author", {
+        ...recipe,
+        files: {
+          interface: "export type RecipeCount = number;",
+          source: `import type { RecipeCount } from "./recipe-contract.${javascript}";\nexport const count: RecipeCount = "wrong";`,
+        },
+        fileNames: {
+          source: "recipe-entry." + typescript,
+          interface: "recipe-contract.d." + typescript,
+        },
+      });
+      assert.equal(response.status, 400);
+      const { error } = await response.json();
+      assert.match(error, /^source:2:\d+ .*TS2322/u);
+      assert.doesNotMatch(error, /TS2307/u);
+    }
+    await expectError(
+      dispatch,
+      "/api/submit",
+      "author",
+      {
+        ...recipe,
+        files: {
+          source: "export const count = 4;",
+          tests:
+            'import { count } from "./recipe-value.d.js";\nexport const shown: string = count;',
+        },
+        fileNames: { source: "recipe-value.d.js" },
+      },
+      400,
+      /^tests:2:\d+ .*TS2322/u,
+    );
   } finally {
     assert.equal((await dispatch(settingsPath, "maintainer", policy)).status, 200);
   }
