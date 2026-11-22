@@ -1509,6 +1509,7 @@ describe("hasFields", () => {
   let inferenceCalls = 0;
   let llmReviewCalls = 0;
   const docsMethods = [];
+  const catalogModels = [model, model, "invalid model"];
   const provider = {
     bindings: { SETTINGS_ENCRYPTION_KEY: deploymentKey },
     /**
@@ -1575,7 +1576,7 @@ describe("hasFields", () => {
       assert.equal(request.headers.get("authorization"), "Bearer " + key);
       assert.equal(url.origin, "https://api.openai.com");
       if (url.pathname === "/v1/models") {
-        return Response.json({ data: [{ id: model }, { id: model }, { id: "invalid model" }] });
+        return Response.json({ data: catalogModels.map((id) => ({ id })) });
       }
       assert.equal(url.pathname, "/v1/responses");
       const body = await request.json();
@@ -2029,8 +2030,9 @@ describe("hasFields", () => {
   await verifyOfflineFileEditor(dispatch);
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
   if (coverageOutput) {
+    catalogModels.push("gpt-6.2-sol", "gpt-6-luna");
     const { exerciseBrowser } = await import("../tests/browser-coverage.mjs");
-    await exerciseBrowser(dispatch, coverageOutput, namedRef);
+    await exerciseBrowser(dispatch, coverageOutput, namedRef, key);
   }
   console.log(
     JSON.stringify({

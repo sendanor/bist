@@ -352,25 +352,217 @@ async function verifyReviewDecisions(window, dispatch, draft) {
 }
 
 /**
- * Navigate to the queue and the maintainer's separate settings pages.
- * @param window Maintainer's initialized test window.
+ * Save valid formatting preferences and recover from an invalid ESLint edit.
+ * @param window Maintainer's code policy page.
+ * @param dispatch Authenticated transport to verify the saved policy.
  */
-async function verifyMaintainerNavigation(window) {
+async function verifyCodePolicy(window, dispatch) {
+  const form = window.document.querySelector(".code-settings");
+  const search = form.querySelector('input[type="search"]');
+  search.value = "eqeqeq";
+  search.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(form.querySelector(".rule-matches").textContent, "eqeqeq");
+  const original = form.elements.eslint.value;
+  form.elements.eslint.value = '{"unexpected":true}';
+  form.requestSubmit();
+  const status = form.querySelector('[role="status"]');
+  assert.match(status.textContent, /Unsupported ESLint configuration field unexpected/u);
+  form.elements.eslint.value = original;
+  form.elements.printWidth.value = "92";
+  form.elements.tabWidth.value = "4";
+  form.elements.duplicateCode.value = "warn";
+  form.requestSubmit();
+  await eventually(() => status.textContent === "Code policy saved.", "saved code policy");
+  const { policy } = await (await dispatch("/api/settings", "maintainer")).json();
+  assert.equal(policy.prettier.printWidth, 92);
+  assert.equal(policy.prettier.tabWidth, 4);
+  assert.equal(policy.quality.duplicateCode, "warn");
+}
+
+/**
+ * Save a restricted tool list and toggle Assistant add-ons using the live Worker routes.
+ * @param window Maintainer's MCP settings page.
+ * @param dispatch Authenticated transport to verify tool discovery and persisted switches.
+ */
+async function verifyMcpSettings(window, dispatch) {
+  const { document } = window;
+  const form = document.querySelector("#view form");
+  const status = form.querySelector('[role="status"]');
+  const enabled = form.elements.enabled;
+  enabled.checked = false;
+  form.requestSubmit();
+  await eventually(() => status.textContent === "MCP settings saved.", "saved paused MCP instance");
+  clickText(form, "button", "Check tool list");
+  await eventually(
+    () => status.textContent === "No MCP tools are available.",
+    "paused tool discovery",
+  );
+  enabled.checked = true;
+  for (const tool of form.querySelectorAll('input[name="enabledTool"]')) {
+    tool.checked = tool.value === "search_recipes";
+  }
+  form.requestSubmit();
+  await eventually(() => status.textContent === "MCP settings saved.", "saved limited tool list");
+  clickText(form, "button", "Check tool list");
+  await eventually(
+    () => status.textContent === "The MCP tool list is available.",
+    "enabled tool discovery",
+  );
+  const tools = await (await dispatch("/api/settings/mcp/check", "maintainer")).json();
+  assert.deepEqual(tools.tools, ["search_recipes"]);
+  const fields = document.querySelector(".assistant-add-ons");
+  for (const [name, path] of [
+    ["Context7", "context7"],
+    ["OpenAI Docs", "openai-docs"],
+  ]) {
+    const addOn = [...fields.querySelectorAll("label")].find(
+      (row) => row.querySelector("strong").textContent === name,
+    );
+    const checkbox = addOn.querySelector("input");
+    for (const expected of [!checkbox.checked, checkbox.checked]) {
+      checkbox.click();
+      await eventually(() => !fields.disabled, "saved " + name);
+      const state = await (await dispatch("/api/settings/mcp/" + path, "maintainer")).json();
+      assert.equal(state.enabled, expected);
+    }
+  }
+  const skills = await (await dispatch("/api/settings/mcp/skills", "maintainer")).json();
+  const skill = fields.querySelector("input");
+  assert.equal(skill.checked, skills.enabled.includes(skills.skills[0]));
+  skill.click();
+  await eventually(() => !fields.disabled, "updated a built-in skill");
+  const updated = await (await dispatch("/api/settings/mcp/skills", "maintainer")).json();
+  assert.equal(updated.enabled.includes(skills.skills[0]), skill.checked);
+  skill.click();
+  await eventually(() => !fields.disabled, "restored the built-in skill");
+  const restored = await (await dispatch("/api/settings/mcp/skills", "maintainer")).json();
+  assert.equal(
+    restored.enabled.includes(skills.skills[0]),
+    skills.enabled.includes(skills.skills[0]),
+  );
+}
+
+/**
+ * Switch model and reasoning effort, then remove and restore the disposable test credential.
+ * @param window Maintainer's OpenAI settings page.
+ * @param dispatch Authenticated transport to verify the saved connection metadata.
+ * @param key Synthetic lookup credential accepted by the provider fixture.
+ */
+async function verifyOpenAiSettings(window, dispatch, key) {
+  const { document } = window;
+  const credential = document.querySelector('input[name="apiKey"]');
+  const keyForm = credential.form;
+  const keyStatus = keyForm.querySelector('[role="status"]');
+  const model = document.querySelector('select[name="model"]');
+  const modelStatus = model.form.querySelector('[role="status"]');
+  const reasoning = model.form.elements.reasoningEffort;
+  assert.equal(credential.value, "");
+  await eventually(() => !model.disabled, "catalog populated");
+  clickText(model.form, "button", "Refresh models");
+  await eventually(() => !model.disabled, "catalog refreshed");
+  model.value = "gpt-6-luna";
+  model.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.ok([...reasoning.options].some((option) => option.value === "none"));
+  reasoning.value = "none";
+  reasoning.dispatchEvent(new window.Event("change", { bubbles: true }));
+  model.form.requestSubmit();
+  await eventually(
+    () => modelStatus.textContent === "OpenAI model saved.",
+    "saved conversation model",
+  );
+  const settings = await (await dispatch("/api/settings/openai", "maintainer")).json();
+  assert.equal(settings.model, "gpt-6-luna");
+  assert.equal(settings.reasoningEffort, "none");
+  clickText(keyForm, "button", "Remove API key");
+  clickText(keyForm, "button", "Cancel");
+  assert.equal(keyStatus.textContent, "");
+  clickText(keyForm, "button", "Remove API key");
+  clickText(keyForm, "button", "Confirm removal");
+  await eventually(() => keyStatus.textContent === "OpenAI API key removed.", "cleared credential");
+  assert.equal(model.disabled, true);
+  assert.equal(modelStatus.textContent, "Save an API key to load the model list.");
+  credential.value = key;
+  keyForm.requestSubmit();
+  await eventually(
+    () => keyStatus.textContent === "OpenAI settings saved." && !model.disabled,
+    "restored synthetic credential",
+  );
+  assert.equal(credential.value, "");
+  assert.equal(model.value, "gpt-6-luna");
+  assert.equal(reasoning.value, "none");
+}
+
+/**
+ * Configure a review rule and verify the saved model, reasoning and file criteria.
+ * @param window Maintainer's LLM review settings page.
+ * @param dispatch Authenticated transport for the stored policy.
+ */
+async function verifyReviewSettings(window, dispatch) {
+  const { document } = window;
+  const model = document.querySelector('input[name="model"]');
+  const form = model.form;
+  model.value = "gpt-6.2-sol";
+  model.dispatchEvent(new window.Event("input", { bubbles: true }));
+  form.querySelector("select").value = "high";
+  const docs = [...form.querySelectorAll("fieldset")].find(
+    (group) => group.querySelector("legend").textContent === "Documentation",
+  );
+  docs.querySelector("select").value = "warn";
+  docs.querySelector("textarea").value = " Check whether examples identify their input. ";
+  form.requestSubmit();
+  await eventually(
+    () => form.querySelector('[role="status"]').textContent === "Review settings saved.",
+    "saved review rules",
+  );
+  const policy = await (await dispatch("/api/settings/llm-review", "maintainer")).json();
+  assert.equal(policy.model, "gpt-6.2-sol");
+  assert.equal(policy.reasoningEffort, "high");
+  assert.deepEqual(policy.rules.documentation, {
+    mode: "warn",
+    instruction: "Check whether examples identify their input.",
+  });
+}
+
+/**
+ * Navigate to the queue and exercise the maintainer's individual settings pages.
+ * @param window Maintainer's initialized test window.
+ * @param dispatch Authenticated transport to verify persisted settings.
+ * @param key Synthetic provider credential from the integration environment.
+ */
+async function verifyMaintainerNavigation(window, dispatch, key) {
   const { document } = window;
   assert.equal(document.querySelector("#view h1")?.textContent, "Recipe library");
   const pages = [
     ["/review", "Review queue"],
     ["/settings", "Settings"],
-    ["/settings/openai", "OpenAI"],
-    ["/settings/code-policy", "Code policy"],
-    ["/settings/mcp", "MCP"],
-    ["/settings/llm-review", "LLM review"],
+    ["/settings/llm-review", "LLM review", verifyReviewSettings],
+    ["/settings/openai", "OpenAI", verifyOpenAiSettings],
+    ["/settings/code-policy", "Code policy", verifyCodePolicy],
+    ["/settings/mcp", "MCP", verifyMcpSettings],
   ];
-  for (const [path, heading] of pages) {
+  for (const [path, heading, verify] of pages) {
     document.querySelector('nav a[href="' + path + '"]').click();
     assert.equal(window.location.pathname, path);
     await eventually(() => document.querySelector("#view h1")?.textContent === heading, heading);
+    await verify?.(window, dispatch, key);
   }
+  document.querySelector('nav a[href="/settings/openai"]').click();
+  await eventually(
+    () => document.querySelector('select[name="model"]')?.value === "gpt-6-luna",
+    "restored saved model on returning to OpenAI settings",
+  );
+  assert.equal(document.querySelector('select[name="reasoningEffort"]').value, "none");
+  assert.equal(document.querySelector('input[name="apiKey"]').value, "");
+  document.querySelector('nav a[href="/settings/mcp"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "MCP",
+    "reopened MCP settings",
+  );
+  const checked = [...document.querySelectorAll('input[name="enabledTool"]:checked')];
+  assert.deepEqual(
+    checked.map((tool) => tool.value),
+    ["search_recipes"],
+  );
 }
 
 /**
@@ -546,12 +738,13 @@ async function verifyEditorRecovery(window) {
  * @param dispatch Authenticated test transport.
  * @param directory Run-specific directory where counters are stored.
  * @param draft Selected author's draft with a documentation file.
+ * @param key Synthetic provider credential already configured in the test Worker.
  */
-export async function exerciseBrowser(dispatch, directory, draft) {
+export async function exerciseBrowser(dispatch, directory, draft, key) {
   const maintainer = await openPage(dispatch, "/library", "maintainer");
   try {
     await verifyLibrarySearch(maintainer);
-    await verifyMaintainerNavigation(maintainer);
+    await verifyMaintainerNavigation(maintainer, dispatch, key);
     await verifyAssistant(maintainer);
     assert.ok(maintainer.__coverage__["src/browser.js"]);
     await writeFile(
