@@ -48,8 +48,14 @@ async function openPage(dispatch, path, user) {
   dialogs.showModal = function () {
     this.open = true;
   };
-  /** Close the dialog and notify the same listeners as the browser. */
-  dialogs.close = function () {
+  /**
+   * Close the dialog and notify the same listeners as the browser.
+   * @param value Optional result recorded by an explicit dialog action.
+   */
+  dialogs.close = function (value) {
+    if (value !== undefined) {
+      this.returnValue = value;
+    }
     this.open = false;
     this.dispatchEvent(new window.Event("close"));
   };
@@ -69,6 +75,100 @@ function clickText(parent, selector, label) {
   );
   assert.ok(action, label);
   action.click();
+}
+
+/**
+ * Check Assistant exchanges, reference fields, failure recovery and retained panel state.
+ * @param window Maintainer's application window.
+ */
+async function verifyAssistant(window) {
+  const { document } = window;
+  const fetch = window.fetch;
+  const sent = [];
+  /**
+   * Supply repeatable Assistant replies while forwarding other application traffic.
+   * @param path API resource requested by the browser.
+   * @param options Request method and serialized draft fields.
+   */
+  window.fetch = (path, options) => {
+    if (path !== "/api/assistant") {
+      return fetch(path, options);
+    }
+    if (!options?.method) {
+      return Promise.resolve(
+        Response.json({ configured: true, docsSearch: true, context7Search: true }),
+      );
+    }
+    const request = JSON.parse(options.body);
+    sent.push(request);
+    if (sent.length === 2) {
+      return Promise.resolve(
+        Response.json({ error: "Assistant is temporarily unavailable." }, { status: 503 }),
+      );
+    }
+    return Promise.resolve(
+      Response.json({
+        answer: sent.length === 1 ? "This is the first reply." : "This is the follow-up.",
+        sources: [],
+        docsSources:
+          sent.length === 1
+            ? [{ url: "https://example.test/reference", title: "Fixture documentation" }]
+            : [],
+      }),
+    );
+  };
+  try {
+    const panel = document.querySelector("#assistant-panel");
+    const toggle = document.querySelector("#assistant-toggle");
+    toggle.click();
+    await eventually(() => Boolean(panel.querySelector("form")), "Assistant composer opened");
+    const form = panel.querySelector("form");
+    clickText(form, "button", "Search documentation");
+    form.elements.docsQuery.value = "Article structure";
+    form.elements.libraryId.value = "/fixture/library";
+    form.elements.question.value = "Give one example.";
+    form.requestSubmit();
+    await eventually(
+      () => Boolean(panel.querySelector('a[href="https://example.test/reference"]')),
+      "rendered reference link",
+    );
+    assert.equal(sent[0].docsQuery, "Article structure");
+    assert.equal(sent[0].libraryId, "/fixture/library");
+    assert.deepEqual(sent[0].history, []);
+    clickText(form, "button", "Search documentation");
+    form.elements.question.value = "Give another example.";
+    form.requestSubmit();
+    await eventually(
+      () => form.textContent.includes("Assistant is temporarily unavailable."),
+      "Assistant error shown",
+    );
+    assert.equal(form.elements.question.value, "Give another example.");
+    assert.equal(sent[1].docsQuery, undefined);
+    assert.deepEqual(sent[1].history, [
+      { role: "user", content: "Give one example." },
+      { role: "assistant", content: "This is the first reply." },
+    ]);
+    form.requestSubmit();
+    await eventually(
+      () => panel.textContent.includes("This is the follow-up."),
+      "successful retry",
+    );
+    document
+      .querySelector("#assistant-resize")
+      .dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
+      );
+    assert.ok(panel.parentElement.style.getPropertyValue("--assistant-width"));
+    form.elements.question.value = "A draft that survives closing.";
+    panel.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert.equal(panel.hidden, true);
+    toggle.click();
+    assert.equal(form.elements.question.value, "A draft that survives closing.");
+    assert.match(panel.textContent, /This is the follow-up/u);
+    document.querySelector("#assistant-close").click();
+  } finally {
+    window.fetch = fetch;
+  }
 }
 
 /**
@@ -199,6 +299,59 @@ async function verifyReviewerComments(window) {
 }
 
 /**
+ * Exercise review actions and verify publication and quarantine against the fixture database.
+ * @param window Maintainer's window showing a pending test revision.
+ * @param dispatch Authenticated test transport to verify visibility after a review decision.
+ * @param draft Revision whose state is changed.
+ */
+async function verifyReviewDecisions(window, dispatch, draft) {
+  const { document } = window;
+  /** Read the current revision status after each rerender. */
+  const byline = () => document.querySelector(".recipe-byline");
+
+  /**
+   * Select an action from the real revision toolbar.
+   * @param label Visible action label.
+   */
+  function choose(label) {
+    document.querySelector(".revision-trigger").click();
+    clickText(document.querySelector(".revision-menu"), "button", label);
+  }
+  choose("Re-run LLM review");
+  const recheck = document.querySelector(".revision-recheck");
+  await eventually(
+    () => recheck.querySelector(".revision-action-error")?.textContent.includes("off"),
+    "recheck explains disabled policy",
+  );
+  clickText(recheck, "button", "Dismiss recheck summary");
+  assert.equal(recheck.hidden, true);
+  choose("Request changes");
+  const reconsider = document.querySelector('dialog[aria-labelledby="revision-action-heading"]');
+  assert.equal(reconsider.querySelector("textarea").required, true);
+  clickText(reconsider, "button", "Cancel");
+  assert.ok(!reconsider.isConnected);
+  choose("Approve revision");
+  document.querySelector('dialog textarea[name="reason"]').value =
+    "Verified in the browser fixture.";
+  document.querySelector("dialog form").requestSubmit();
+  await eventually(() => byline()?.querySelector(".state-approved"), "approval shown");
+  choose("Publish approved revision");
+  document.querySelector("dialog form").requestSubmit();
+  await eventually(() => byline()?.querySelector(".state-published"), "publication shown");
+  const query = new URLSearchParams({ slug: draft.slug });
+  assert.equal((await dispatch("/api/recipe?" + query, "reader")).status, 200);
+  choose("Quarantine");
+  const form = document.querySelector("dialog form");
+  form.elements.reason.value = "  ";
+  form.requestSubmit();
+  assert.equal(form.elements.reason.value, "");
+  form.elements.reason.value = "Quarantine the disposable browser fixture.";
+  form.requestSubmit();
+  await eventually(() => byline()?.querySelector(".state-quarantined"), "quarantine shown");
+  assert.equal((await dispatch("/api/recipe?" + query, "reader")).status, 404);
+}
+
+/**
  * Navigate to the queue and the maintainer's separate settings pages.
  * @param window Maintainer's initialized test window.
  */
@@ -282,6 +435,113 @@ async function verifyDraftEditor(window) {
 }
 
 /**
+ * Keep the working copy when a save fails or the author supersedes a model request.
+ * @param window Author's opened recipe window after a successful file edit.
+ */
+async function verifyEditorRecovery(window) {
+  const { document } = window;
+  const fetch = window.fetch;
+  const failedSuggestion = Promise.withResolvers();
+  const staleSuggestion = Promise.withResolvers();
+  const failedSave = Promise.withResolvers();
+  const signals = [];
+  let saves = 0;
+  /**
+   * Delay responses so intermediate editor states and concurrency can be asserted.
+   * @param path API resource being requested.
+   * @param options Request options, including the model request cancellation signal.
+   */
+  window.fetch = (path, options) => {
+    if (path === "/api/recipe/file/suggest") {
+      signals.push(options.signal);
+      if (signals.length === 3) {
+        return Promise.resolve(Response.json({ content: JSON.parse(options.body).content }));
+      }
+      return (signals.length === 1 ? failedSuggestion : staleSuggestion).promise;
+    }
+    if (path === "/api/recipe/file") {
+      saves++;
+      return saves === 1
+        ? failedSave.promise
+        : Promise.resolve(
+            Response.json(
+              { error: "Duplicate recipe fixture.", code: "duplicate_warning" },
+              { status: 409 },
+            ),
+          );
+    }
+    return fetch(path, options);
+  };
+  try {
+    const section = document.querySelector(
+      'section[aria-labelledby="recipe-part-title-documentation"]',
+    );
+    section.querySelector('button[aria-label="Edit file"]').click();
+    const dialog = document.querySelector("dialog.file-editor");
+    const input = dialog.querySelector("textarea.code-input");
+    const instruction = dialog.querySelector(".file-edit-assist textarea");
+    const status = dialog.querySelector('[role="status"]');
+    instruction.value = "Improve the draft.";
+    instruction.dispatchEvent(new window.Event("input", { bubbles: true }));
+    clickText(dialog, "button", "Suggest edit");
+    assert.equal(signals[0].aborted, false);
+    failedSuggestion.resolve(
+      Response.json({ error: "Provider temporarily unavailable." }, { status: 503 }),
+    );
+    await eventually(
+      () => status.textContent === "Provider temporarily unavailable.",
+      "suggestion error shown",
+    );
+
+    clickText(dialog, "button", "Suggest edit");
+    const manual = input.value + "\nPreserve this newer working copy.";
+    input.value = manual;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(signals[1].aborted, true);
+    staleSuggestion.resolve(
+      Response.json({ content: "Outdated proposal that must not replace the manual edit." }),
+    );
+    await setTimeout(0);
+    assert.equal(input.value, manual);
+
+    clickText(dialog, "button", "Suggest edit");
+    await eventually(
+      () => status.textContent.includes("unchanged"),
+      "identical model output shown as unchanged",
+    );
+    assert.equal(input.value, manual);
+    const save = dialog.querySelector("button.primary");
+    save.click();
+    const escape = new window.Event("cancel", { cancelable: true });
+    dialog.dispatchEvent(escape);
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(input.readOnly, true);
+    failedSave.resolve(Response.json({ error: "Draft version changed." }, { status: 409 }));
+    await eventually(
+      () => status.textContent === "Draft version changed." && !save.disabled,
+      "reload conflict shown",
+    );
+    assert.equal(input.value, manual);
+    assert.equal(input.readOnly, false);
+    save.click();
+    await eventually(
+      () => Boolean(document.querySelector('dialog[aria-labelledby="submission-warning-heading"]')),
+      "duplicate submission warning opened",
+    );
+    const warning = document.querySelector('dialog[aria-labelledby="submission-warning-heading"]');
+    assert.match(warning.textContent, /Duplicate recipe fixture/u);
+    clickText(warning, "button", "Cancel");
+    await eventually(() => !save.disabled, "cancelled submission returns to the editor");
+    assert.equal(input.value, manual);
+    assert.equal(dialog.dispatchEvent(new window.Event("cancel", { cancelable: true })), true);
+    clickText(dialog, "button", "Cancel");
+    await eventually(() => !dialog.isConnected, "dismissed editor after save conflict");
+  } finally {
+    window.fetch = fetch;
+  }
+}
+
+/**
  * Exercise the real bundled UI and retain coverage from both roles.
  * @param dispatch Authenticated test transport.
  * @param directory Run-specific directory where counters are stored.
@@ -292,6 +552,7 @@ export async function exerciseBrowser(dispatch, directory, draft) {
   try {
     await verifyLibrarySearch(maintainer);
     await verifyMaintainerNavigation(maintainer);
+    await verifyAssistant(maintainer);
     assert.ok(maintainer.__coverage__["src/browser.js"]);
     await writeFile(
       join(directory, "browser-maintainer.json"),
@@ -304,6 +565,7 @@ export async function exerciseBrowser(dispatch, directory, draft) {
   try {
     await verifyContribution(author);
     await verifyDraftEditor(author);
+    await verifyEditorRecovery(author);
     assert.ok(author.__coverage__["src/file-editor.js"]);
     await writeFile(join(directory, "browser-author.json"), JSON.stringify(author.__coverage__));
   } finally {
@@ -316,6 +578,7 @@ export async function exerciseBrowser(dispatch, directory, draft) {
   );
   try {
     await verifyReviewerComments(reviewer);
+    await verifyReviewDecisions(reviewer, dispatch, draft);
     await writeFile(
       join(directory, "browser-reviewer.json"),
       JSON.stringify(reviewer.__coverage__),
