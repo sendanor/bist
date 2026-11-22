@@ -3,6 +3,11 @@ import { defaultReviewPolicy } from "../src/quality/review-defaults.ts";
 import { verifyReviewOnboarding } from "../tests/review-onboarding.mjs";
 import { verifyWorkerValidation } from "../tests/worker-validation.mjs";
 import {
+  assistantAvailabilityFixture,
+  unavailableAssistantReference,
+  verifyAssistantAvailability,
+} from "../tests/assistant-availability.mjs";
+import {
   context7ReviewFixture,
   unavailableReference,
   verifyContext7RecipeReview,
@@ -1556,6 +1561,10 @@ describe("hasFields", () => {
           return new Response(null, { status: 202 });
         }
         assert.equal(method, "tools/call");
+        const unavailable = unavailableAssistantReference(params, context7);
+        if (unavailable) {
+          return unavailable;
+        }
         if (context7) {
           if (params.arguments.query === unavailableReference) {
             assert.equal(params.name, "query-docs");
@@ -1685,6 +1694,10 @@ describe("hasFields", () => {
       assert.equal(body.model, model);
       assert.equal(body.store, false);
       assert.equal(body.parallel_tool_calls, false);
+      const availability = await assistantAvailabilityFixture(body, dispatch);
+      if (availability) {
+        return availability;
+      }
       if (body.tools.some(({ name }) => name === "query_context7_docs")) {
         const skillTool = body.tools.find(({ name }) => name === "load_task_skill");
         assert.deepEqual(skillTool.parameters.properties.id.enum, ["suomenkieli"]);
@@ -2060,6 +2073,7 @@ describe("hasFields", () => {
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
   await verifyWorkerValidation(dispatch, await runtime.getD1Database("DB"));
   await verifyContext7RecipeReview(dispatch, await runtime.getD1Database("DB"));
+  await verifyAssistantAvailability(dispatch);
   if (coverageOutput) {
     catalogModels.push("gpt-6.2-sol", "gpt-6-luna");
     const { exerciseBrowser } = await import("../tests/browser-coverage.mjs");
