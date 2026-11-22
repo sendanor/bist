@@ -82,8 +82,9 @@ async function disposeRuntime() {
  * @param path The path to request within the Worker.
  * @param user The fixture identity or null for anonymous access.
  * @param data The optional JSON payload for a POST request.
+ * @param identity Optional synthetic identity header overrides for gateway edge cases.
  */
-function dispatch(path, user, data) {
+function dispatch(path, user, data, identity = {}) {
   const origin = "https://cookbook.local";
   const headers = { origin: origin };
   if (user) {
@@ -99,7 +100,7 @@ function dispatch(path, user, data) {
   }
   return runtime.dispatchFetch(origin + path, {
     method: data ? "POST" : "GET",
-    headers,
+    headers: { ...headers, ...identity },
     body: data && JSON.stringify(data),
   });
 }
@@ -1611,7 +1612,7 @@ describe("hasFields", () => {
         llmReviewCalls++;
         assert.equal(body.model, "gpt-6.2-sol");
         assert.equal(body.store, false);
-        const context7Review = context7ReviewFixture(body);
+        const context7Review = await context7ReviewFixture(body);
         if (context7Review) {
           return context7Review;
         }

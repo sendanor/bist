@@ -250,6 +250,20 @@ async function verifyStoredData(dispatch, db) {
   const saved = await created.json();
   const target = { slug: recipe.slug, revision: saved.id, editVersion: saved.editVersion };
   const detail = "/api/recipe?" + new URLSearchParams(target);
+  const comment = await dispatch(
+    "/api/comment",
+    "maintainer",
+    { ...target, part: "documentation", line: null, body: "Check the reviewer name fallback." },
+    { "oai-authenticated-user-full-name": "%GG" },
+  );
+  assert.equal(comment.status, 201);
+  assert.equal((await comment.json()).authorName, "maintainer");
+  const anonymousName = await dispatch("/api/session", "identity-fixture", undefined, {
+    "oai-authenticated-user-email": "",
+    "oai-authenticated-user-full-name": " ",
+  });
+  assert.equal(anonymousName.status, 200);
+  assert.deepEqual(await anonymousName.json(), { maintainer: false });
   await expectError(
     dispatch,
     "/api/recipe/file",
@@ -356,6 +370,59 @@ async function verifyStoredData(dispatch, db) {
       await db.prepare("DELETE FROM llm_review_settings WHERE id = 1").run();
     }
   }
+}
+
+/**
+ * Check that invalid or unavailable provider storage fails without starting inference.
+ * @param dispatch Authenticated transport for the local Worker.
+ * @param db Disposable D1 database with a configured synthetic provider.
+ */
+async function verifyProviderStorage(dispatch, db) {
+  const read = db.prepare("SELECT model FROM openai_settings WHERE id = 1");
+  const { model } = await read.first();
+  const save = db.prepare("UPDATE openai_settings SET model = ? WHERE id = 1");
+  const actor = "provider-storage-fixture";
+  const created = await dispatch("/api/submit", actor, {
+    slug: actor,
+    title: "Stored provider settings",
+    summary: "Fail closed when a saved model identifier is invalid.",
+    files: { documentation: "Explain how to recover an invalid model configuration." },
+  });
+  assert.equal(created.status, 201);
+  const { id, editVersion } = await created.json();
+  try {
+    await save.bind("invalid model identifier").run();
+    await expectError(
+      dispatch,
+      "/api/recipe/file/suggest",
+      actor,
+      {
+        slug: actor,
+        revision: id,
+        editVersion,
+        part: "documentation",
+        content: "The working copy is only sent to a configured model.",
+        instruction: "Clarify the second sentence.",
+      },
+      503,
+      /Configure a valid OpenAI connection/u,
+    );
+  } finally {
+    await save.bind(model).run();
+  }
+  await db.prepare("ALTER TABLE openai_settings RENAME TO unavailable_openai_settings").run();
+  try {
+    const failed = await dispatch("/api/settings/openai", "maintainer");
+    assert.equal(failed.status, 500);
+    assert.deepEqual(await failed.json(), {
+      error: "The OpenAI operation failed. Please retry.",
+    });
+  } finally {
+    await db.prepare("ALTER TABLE unavailable_openai_settings RENAME TO openai_settings").run();
+  }
+  const restored = await (await dispatch("/api/settings/openai", "maintainer")).json();
+  assert.equal(restored.model, model);
+  assert.equal(restored.configured, true);
 }
 
 /**
@@ -490,6 +557,7 @@ export async function verifyWorkerValidation(dispatch, db) {
   await verifySettingsValidation(dispatch);
   await verifyRecipeValidation(dispatch);
   await verifyStoredData(dispatch, db);
+  await verifyProviderStorage(dispatch, db);
   await verifyProviderQuotas(dispatch, db);
   await verifyLegacyBatch(dispatch, db);
 }

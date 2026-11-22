@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 
 const criterion = "Confirm the example against the React state documentation.";
 export const unavailableReference = "Unavailable React state reference";
+let beforeReviewResult;
 
 /**
  * Advise on a fixture recipe only after reading the configured Context7 reference.
  * @param request Fixture Responses API request made by the Worker.
  */
-export function context7ReviewFixture(request) {
+export async function context7ReviewFixture(request) {
   if (!request.instructions.includes(criterion)) {
     return undefined;
   }
@@ -32,6 +33,9 @@ export function context7ReviewFixture(request) {
   }
   assert.equal(last.call_id, "context7-review-reference");
   assert.deepEqual(JSON.parse(last.output), { excerpt: "React documentation excerpt" });
+  const beforeResult = beforeReviewResult;
+  beforeReviewResult = undefined;
+  await beforeResult?.();
   const text = JSON.stringify({
     results: [{ part: "documentation", acceptable: true, reason: "" }],
   });
@@ -82,9 +86,33 @@ export async function verifyContext7RecipeReview(dispatch, db) {
     const revision = db.prepare("SELECT state FROM revisions WHERE slug = ?").bind(recipe.slug);
     assert.equal(await revision.first(), null);
     assert.equal((await dispatch(settings, "maintainer", policy)).status, 200);
-    assert.equal((await dispatch("/api/submit", actor, recipe)).status, 201);
+    const created = await dispatch("/api/submit", actor, recipe);
+    assert.equal(created.status, 201);
     assert.deepEqual(await revision.first(), { state: "pending" });
+    const { id, editVersion } = await created.json();
+    const replacement = { ...recipe, replace: id, editVersion, allowDuplicates: true };
+    const winner = "Document the new updater before recording the fallback.";
+    /** Commit a second replacement while the first awaits its review result. */
+    beforeReviewResult = async () => {
+      const result = await dispatch("/api/submit", actor, {
+        ...replacement,
+        files: { documentation: winner },
+      });
+      assert.equal(result.status, 200);
+      assert.equal((await result.json()).editVersion, editVersion + 1);
+    };
+    const stale = await dispatch("/api/submit", actor, {
+      ...replacement,
+      files: { documentation: "Review this alternate updater example before saving it." },
+    });
+    assert.equal(stale.status, 409);
+    assert.match((await stale.json()).error, /This draft cannot be replaced/u);
+    const query = new URLSearchParams({ slug: recipe.slug, revision: id });
+    const current = await (await dispatch("/api/recipe?" + query, actor)).json();
+    assert.equal(current.editVersion, editVersion + 1);
+    assert.equal(current.files.documentation.trim(), winner);
   } finally {
+    beforeReviewResult = undefined;
     assert.equal((await dispatch(settings, "maintainer", initialPolicy)).status, 200);
     assert.equal((await dispatch(connection, "maintainer", initialConnection)).status, 200);
   }
