@@ -81,6 +81,8 @@ export async function assistantAvailabilityFixture(request, dispatch) {
 export async function verifyAssistantAvailability(dispatch) {
   const docs = "/api/settings/mcp/openai-docs";
   const context7 = "/api/settings/mcp/context7";
+  const reviewPath = "/api/settings/llm-review";
+  const policy = await (await dispatch(reviewPath, "maintainer")).json();
   const initial = [];
   for (const route of [docs, context7, skillsPath]) {
     const response = await dispatch(route, "maintainer");
@@ -103,8 +105,30 @@ export async function verifyAssistantAvailability(dispatch) {
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { answer, sources: [], docsSources: [] });
     }
-    assert.deepEqual(failedLookups, ["search_openai_docs", "query-docs"]);
+    const configured = await dispatch(reviewPath, "maintainer", {
+      ...policy,
+      enabled: true,
+      model: "gpt-6.2-sol",
+      reasoningEffort: "low",
+      referenceQuery: docsQuery,
+      referenceLibraryId: "",
+      rules: { documentation: { mode: "warn", instruction: "Require an exact next step." } },
+    });
+    assert.equal(configured.status, 200);
+    const slug = "unavailable-review-reference";
+    const submitted = await dispatch("/api/submit", slug, {
+      slug,
+      title: "Review with an unavailable reference",
+      summary: "Do not accept a submission backed by a failed documentation lookup.",
+      files: { documentation: "# Streaming\n\nRead the response events in order." },
+    });
+    assert.equal(submitted.status, 502);
+    assert.match((await submitted.json()).error, /OpenAI could not complete the request/u);
+    const drafts = await (await dispatch("/api/mine", slug)).json();
+    assert.deepEqual(drafts.items, []);
+    assert.deepEqual(failedLookups, ["search_openai_docs", "query-docs", "search_openai_docs"]);
   } finally {
+    assert.equal((await dispatch(reviewPath, "maintainer", policy)).status, 200);
     for (const [route, settings] of initial) {
       assert.equal(
         (await dispatch(route, "maintainer", { enabled: settings.enabled })).status,

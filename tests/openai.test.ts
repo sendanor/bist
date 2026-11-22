@@ -318,3 +318,39 @@ test("assistant rejects oversized tool arguments before executing a local lookup
   assert.equal(answer, "Use shorter search terms.");
   assert.equal(calls, 2);
 });
+
+test("assistant rejects extra fields in a tool call before performing any lookup", async () => {
+  let turns = 0;
+  const answer = await runOpenAiAssistant(
+    config,
+    "Look up a public recipe",
+    async () => assert.fail("malformed tool input reached the recipe lookup"),
+    async (_url, options) => {
+      if (++turns === 1) {
+        return Response.json({
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              name: "get_recipe",
+              call_id: "extra-input",
+              arguments: JSON.stringify({ slug: "public-example", revision: "unexpected" }),
+            },
+          ],
+        });
+      }
+      const input = JSON.parse(String(options?.body)).input;
+      assert.deepEqual(JSON.parse(input.at(-1).output), {
+        error: "Unknown tool or invalid arguments.",
+      });
+      return Response.json({
+        status: "completed",
+        output: [
+          { type: "message", content: [{ type: "output_text", text: "Lookup was rejected." }] },
+        ],
+      });
+    },
+  );
+  assert.equal(answer, "Lookup was rejected.");
+  assert.equal(turns, 2);
+});

@@ -2059,7 +2059,7 @@ describe("hasFields", () => {
     ...provider,
     bindings: {
       SETTINGS_ENCRYPTION_KEY: rotatedDeploymentKey,
-      MAINTAINER_EMAILS: "different@example.test",
+      MAINTAINER_EMAILS: null,
     },
   });
   assert.equal((await dispatch("/api/settings/openai/remove-key", "maintainer", {})).status, 403);
