@@ -163,6 +163,7 @@ const cases = [
   ["localize-jsx", "const help = <input aria-label={'Search recipes'} />;", /translation catalog/i],
   ["localize-jsx", "const search = <input placeholder='Find recipes' />;", /translation catalog/i],
   ["localize-jsx", "const title = <h1>{t('title')}</h1>;"],
+  ["localize-jsx", "const panel = <section>{/* Internal notes are not displayed. */}</section>;"],
   ["localize-jsx", "const title = <h1>{`Welcome ${name}`}</h1>;", /translation catalog/i],
   [
     "localize-jsx",
@@ -175,6 +176,7 @@ const cases = [
     /injected service/i,
   ],
   ["browser-boundaries", "const view = <>{globalThis.fetch(url)}</>;", /injected service/i],
+  ["browser-boundaries", "const view = <>{service.fetch(url)}</>;"],
   ["browser-boundaries", "const view = <>{navigator.sendBeacon(url)}</>;", /injected service/i],
   ["browser-boundaries", "const view = <>{new service.WebSocket(url)}</>;"],
   [

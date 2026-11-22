@@ -352,21 +352,18 @@ const browserMethods = new Set([
 
 /**
  * Identify direct network or storage access through known browser APIs.
- * @param node The callee or member node to inspect for browser access.
+ * @param node An identifier or member expression selected by the rule's visitors.
  */
 function isBrowserAccess(node) {
   if (node.type === "Identifier") {
     return browserMethods.has(node.name);
   }
-  if (node.type === "MemberExpression") {
-    return (
-      browserMethods.has(memberName(node)) &&
-      (node.object.name === "window" ||
-        node.object.name === "globalThis" ||
-        node.object.name === "navigator")
-    );
-  }
-  return false;
+  return (
+    browserMethods.has(memberName(node)) &&
+    (node.object.name === "window" ||
+      node.object.name === "globalThis" ||
+      node.object.name === "navigator")
+  );
 }
 
 /**
@@ -375,9 +372,6 @@ function isBrowserAccess(node) {
  * @param value The JSX expression or literal under inspection.
  */
 function directText(context, value) {
-  if (!value) {
-    return;
-  }
   if (value.type === "ConditionalExpression") {
     directText(context, value.consequent);
     directText(context, value.alternate);
