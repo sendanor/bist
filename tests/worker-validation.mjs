@@ -426,6 +426,40 @@ async function verifyProviderStorage(dispatch, db) {
 }
 
 /**
+ * Keep malformed saved tool and skill selections from expanding the assistant's permissions.
+ * @param dispatch Authenticated transport for inspecting instance settings.
+ * @param db Disposable local database with persisted MCP and skill selections.
+ */
+async function verifyStoredAddOnSelections(dispatch, db) {
+  for (const [read, update, route, field] of [
+    [
+      "SELECT enabled_tools AS config FROM mcp_settings WHERE id = 1",
+      "UPDATE mcp_settings SET enabled_tools = ? WHERE id = 1",
+      "/api/settings/mcp",
+      "enabledTools",
+    ],
+    [
+      "SELECT enabled AS config FROM assistant_skill_settings WHERE id = 1",
+      "UPDATE assistant_skill_settings SET enabled = ? WHERE id = 1",
+      "/api/settings/mcp/skills",
+      "enabled",
+    ],
+  ]) {
+    const saved = await db.prepare(read).first();
+    assert.ok(saved, route);
+    const write = db.prepare(update);
+    try {
+      await write.bind("{}").run();
+      const response = await dispatch(route, "maintainer");
+      assert.equal(response.status, 200, route);
+      assert.deepEqual((await response.json())[field], [], route);
+    } finally {
+      await write.bind(saved.config).run();
+    }
+  }
+}
+
+/**
  * Check that rate limits reject quota-exhausted requests before contacting a provider.
  * @param dispatch Request transport for the disposable Worker.
  * @param db Local D1 database containing synthetic quota state.
@@ -558,6 +592,7 @@ export async function verifyWorkerValidation(dispatch, db) {
   await verifyRecipeValidation(dispatch);
   await verifyStoredData(dispatch, db);
   await verifyProviderStorage(dispatch, db);
+  await verifyStoredAddOnSelections(dispatch, db);
   await verifyProviderQuotas(dispatch, db);
   await verifyLegacyBatch(dispatch, db);
 }
