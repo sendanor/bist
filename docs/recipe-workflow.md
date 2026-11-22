@@ -32,6 +32,21 @@ Use a lowercase, hyphenated slug. To update your own unapproved revision, use **
 and include all parts you want to keep. To make further changes to an approved or published
 revision, propose an improvement. This creates a new revision that needs its own approval.
 
+To change one existing file, open your draft and select **Edit file** in that file's toolbar.
+Type directly in **File contents**, or enter an **Instruction for AI** and select **Suggest edit**.
+For example, in a README you can ask, “Add one command that shows how to run the tests.”
+The model reads the selected file's current text, including your unsaved edits, and returns
+its replacement to the editor. Suggestions use the instance's OpenAI key, Assistant model,
+and reasoning setting. Only your instruction, the selected filename and its text go to OpenAI
+for this operation.
+
+Use **Show changes** to compare with the saved file. You can revise the text again,
+choose **Cancel** to discard it, or **Save changes** to update the same draft.
+Saving applies the normal quality checks and warning acknowledgements. If another edit
+has already been saved, copy any text you want to keep and reopen the latest draft.
+File editing is available to the author while a draft is pending or has changes requested.
+A pending removal locks editing.
+
 Maintain a separation between review and publication. A maintainer can approve a revision
 or request changes. Publishing an approved revision makes it the default in search.
 Maintainers can click a code line or use its line-number button to comment directly

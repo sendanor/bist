@@ -125,7 +125,12 @@ export async function checkTranslations() {
     return ["Missing English translation catalog."];
   }
   const used = new Set();
-  for (const file of ["src/browser.js", "src/browser-api.js"]) {
+  for (const file of [
+    "src/browser.js",
+    "src/browser-api.js",
+    "src/browser-dom.js",
+    "src/file-editor.js",
+  ]) {
     const ast = ts.createSourceFile(
       file,
       await readFile(file, "utf8"),

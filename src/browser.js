@@ -1,5 +1,7 @@
 import { t } from "./localization.js";
 import { api } from "./browser-api.js";
+import { btn, el } from "./browser-dom.js";
+import { editRecipeFile } from "./file-editor.js";
 import cssLanguage from "highlight.js/lib/languages/css";
 import { diffLines, sourceLines } from "./line-diff.ts";
 import { parsePagePath } from "./routes.ts";
@@ -60,27 +62,6 @@ let assistantLoading = false;
 const listingPaths = new Map();
 
 /**
- * Create a DOM element, apply properties, and append its children.
- * @param tag The HTML element name to create.
- * @param props The attributes and event listeners to apply.
- * @param children The ordered DOM nodes or text to append.
- */
-function el(tag, props = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (key === "className") {
-      node.className = value;
-    } else if (key.startsWith("on")) {
-      node.addEventListener(key.slice(2), value);
-    } else if (value !== undefined) {
-      node.setAttribute(key, value);
-    }
-  }
-  node.append(...children.filter((child) => child != null && child !== false));
-  return node;
-}
-
-/**
  * Create the decorative icon for a named toolbar action.
  * @param name The key of the icon in the toolbar glyph set.
  */
@@ -105,16 +86,6 @@ function banner(message = "", error = false, revisionFeedback = false) {
   notice.textContent = message;
   notice.classList.toggle("error", error);
   notice.classList.toggle("revision-feedback", revisionFeedback);
-}
-
-/**
- * Make a button that invokes a supplied click handler.
- * @param text The visible label on the button.
- * @param fn The click listener to register.
- * @param style The optional visual style class.
- */
-function btn(text, fn, style = "") {
-  return el("button", { type: "button", className: style, onclick: fn }, text);
 }
 
 /**
@@ -538,13 +509,14 @@ function confirmSubmissionWarning(message, heading) {
 
 /**
  * Retry a complete snapshot only after the author accepts each warning.
- * @param payload Complete recipe snapshot read from the submission form.
+ * @param payload Recipe snapshot or selected file and its expected edit version.
+ * @param path Same-origin submission endpoint that validates and saves this edit.
  */
-async function submitWithWarnings(payload) {
+async function submitWithWarnings(payload, path = "submit") {
   let attempt = payload;
   for (;;) {
     try {
-      return await api("submit", attempt);
+      return await api(path, attempt);
     } catch (error) {
       if (error.code === "duplicate_warning" && !attempt.allowDuplicates) {
         if (!(await confirmSubmissionWarning(error.message, t("duplicate-content")))) {
@@ -1265,6 +1237,22 @@ function fileSection(recipe, key, value, previous, hasBase) {
   const status = el("span", { className: "copy-status", role: "status" });
   const { current, earlier } = fileComments(recipe, key);
   const canComment = recipe.review?.canComment && value !== undefined;
+  const edit =
+    recipe.canReplace &&
+    value !== undefined &&
+    btn(t("edit-file"), async () => {
+      const result = await editRecipeFile(recipe, key, submitWithWarnings, diff);
+      if (result && heading.isConnected) {
+        await render();
+        const target = document.getElementById(heading.id);
+        target?.focus({ preventScroll: true });
+        target?.scrollIntoView({ block: "start" });
+        banner([t("draft-resubmitted-for-review"), ...(result.warnings ?? [])].join("\n"));
+      }
+    });
+  if (edit) {
+    labelFileTool(edit, "edit", t("edit-file"));
+  }
   const feedback = el(
     "div",
     { className: "file-comment-thread" },
@@ -1375,6 +1363,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
         compare,
         markdownSource,
         fileComment,
+        edit,
         wrapButton,
         copy,
         status,
