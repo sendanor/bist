@@ -7,9 +7,16 @@ import { checkTranslations } from "./translations.mjs";
 
 const root = process.cwd();
 const sourceRoot = resolve("src");
-const browserFiles = new Set(["browser.js", "browser-api.js", "localization.js"]);
+const browserFiles = new Set([
+  "browser.js",
+  "browser-api.js",
+  "browser-dom.js",
+  "file-editor.js",
+  "localization.js",
+]);
 const baseFiles = new Set([
   "guards.ts",
+  "recipe-file.ts",
   "reasoning.ts",
   "line-diff.ts",
   "contracts.ts",
@@ -47,7 +54,9 @@ function layer(file) {
   if (["store.ts", "mcp-settings.ts", "llm-review-settings.ts"].includes(path)) {
     return "storage";
   }
-  if (["openai.ts", "openai-docs-mcp.ts", "settings-crypto.ts"].includes(path)) {
+  if (
+    ["openai.ts", "openai-file-edit.ts", "openai-docs-mcp.ts", "settings-crypto.ts"].includes(path)
+  ) {
     return "provider";
   }
   if (path === "submission-review.ts") {
@@ -67,7 +76,7 @@ const allowedLayers = {
   browser: ["base", "browser"],
   quality: ["base", "quality"],
   storage: ["base", "quality", "storage"],
-  provider: ["base"],
+  provider: ["base", "provider"],
   service: ["base", "quality", "storage", "provider"],
   entry: ["base", "quality", "storage", "provider", "asset", "service"],
   asset: ["asset"],

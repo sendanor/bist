@@ -1,4 +1,5 @@
 import { isRecord, isString } from "./guards";
+import { isRecipeFileText } from "./recipe-file.ts";
 import { format } from "prettier/standalone";
 import * as typescript from "prettier/plugins/typescript";
 import * as babel from "prettier/plugins/babel";
@@ -114,16 +115,11 @@ export async function normalizeFiles(
   }
   const files = value;
   const result: Partial<Record<Part, string>> = {};
-  const encoder = new TextEncoder();
   const warnings: string[] = [];
   const errors: string[] = [];
   const sources: Partial<Record<keyof typeof virtualFiles, string>> = {};
   for (const [key, content] of Object.entries(files)) {
-    if (
-      !parts.some((part) => part === key) ||
-      !isString(content) ||
-      encoder.encode(content).length > 12000
-    ) {
+    if (!parts.some((part) => part === key) || !isRecipeFileText(content)) {
       throw new Error("Use supported file parts of at most 12 KB each.");
     }
   }
@@ -151,7 +147,7 @@ export async function normalizeFiles(
     if (key === "styles") {
       try {
         const { text, findings } = await normalizeStyles(content, prettier);
-        if (encoder.encode(text).length > 12000) {
+        if (!isRecipeFileText(text)) {
           throw new Error("Styles exceed 12 KB after formatting.");
         }
         result[key] = text;
@@ -290,7 +286,7 @@ export async function normalizeFiles(
     const spaced = blankLinesBetweenDeclarations
       ? spaceDeclarations(formatted, filename)
       : formatted;
-    if (encoder.encode(spaced).length > 12000) {
+    if (!isRecipeFileText(spaced)) {
       throw new Error(`${key} exceeds 12 KB after formatting.`);
     }
     result[key as Part] = spaced;
