@@ -99,7 +99,7 @@ await build({
     "source-map-support",
     "node:*",
   ],
-  loader: { ".html": "text", ".css": "text", ".md": "text" },
+  loader: { ".html": "text", ".css": "text" },
   plugins: [
     ...instrumentation,
     {
@@ -126,6 +126,20 @@ await build({
             return english[key].replace(/[&<>"']/gu, (character) => htmlEscapes[character]);
           });
           return { contents: html, loader: "text" };
+        });
+        builder.onLoad({ filter: /\/src\/skills\/[^/]+\/SKILL\.md$/ }, async ({ path }) => {
+          const markdown = await readFile(path, "utf8");
+          const manifest = /^---\r?\n([\s\S]+?)\r?\n---\r?\n\r?\n([\s\S]+)$/u.exec(markdown);
+          const encoded = manifest?.[1].match(/^description: (.+)$/mu)?.[1];
+          const description = JSON.parse(encoded ?? "null");
+          const instructions = manifest?.[2];
+          if (typeof description !== "string" || !description.trim() || !instructions?.trim()) {
+            throw new Error("Provide a quoted description and instructions in " + path);
+          }
+          return {
+            contents: JSON.stringify({ markdown, description, instructions }),
+            loader: "json",
+          };
         });
         // Sites exposes Node globals. The recipe compiler uses only our in-memory host.
         builder.onLoad({ filter: /\/typescript\/lib\/typescript\.js$/ }, async ({ path }) => {

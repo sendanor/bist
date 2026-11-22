@@ -14,11 +14,15 @@ declare module "cookbook:browser" {
 }
 
 declare module "cookbook:typescript-libraries" {
-  const libraries: Readonly<Record<string, string | undefined>>;
+  const libraries: Readonly<Record<string, string>>;
   export default libraries;
 }
 
-declare module "*.md" {
-  const text: string;
-  export default text;
+declare module "*/SKILL.md" {
+  const skill: {
+    readonly markdown: string;
+    readonly description: string;
+    readonly instructions: string;
+  };
+  export default skill;
 }

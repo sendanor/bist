@@ -228,7 +228,7 @@ function asset(content: string, type: string) {
  */
 async function downloadSkill(input: Input, cookbook: Cookbook) {
   const name = str(input.name, "skill name", 64, true);
-  let markdown = skills.get(name);
+  let markdown = skills.get(name)?.markdown;
   if (!name) {
     const recipe = await cookbook.get({
       slug: input.slug,
@@ -566,12 +566,7 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
   }
   const config = await openAiConnection(env, cookbook, "ask");
   const activeSkills = await enabledSkills(env.DB, skillNames, defaultSkills);
-  const skillCatalog = activeSkills.flatMap((id) => {
-    const manifest = skills.get(id);
-    const encoded = manifest?.match(/^description: (.+)$/mu)?.[1];
-    const description: unknown = encoded ? JSON.parse(encoded) : null;
-    return isString(description) ? [{ id, description }] : [];
-  });
+  const skillCatalog = activeSkills.map((id) => ({ id, description: skills.get(id)!.description }));
   /**
    * Load a skill only while it is still enabled in the instance configuration.
    * @param id The model-selected identifier already validated against the request catalog.
@@ -580,8 +575,7 @@ async function askAssistant(request: Request, env: Env, cookbook: Cookbook) {
     if (!(await enabledSkills(env.DB, skillNames, defaultSkills)).includes(id)) {
       return null;
     }
-    const manifest = skills.get(id);
-    return manifest?.slice(manifest.indexOf("\n---\n\n") + 6) ?? null;
+    return skills.get(id)!.instructions;
   }
   const sources = new Map<string, { slug: string; id: string; title: string }>();
   const docsSources: { url: string; title: string }[] = [];
