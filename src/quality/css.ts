@@ -1,6 +1,6 @@
 import { format } from "prettier/standalone";
 import * as postcss from "prettier/plugins/postcss";
-import { lexer, parse, walk, type CssNode } from "css-tree";
+import { lexer, parse, walk, type ClassSelector, type Declaration } from "css-tree";
 
 export interface StyleFinding {
   readonly check: "cssClasses" | "cssValidation";
@@ -11,10 +11,14 @@ export interface StyleFinding {
  * Attach a recipe stylesheet location to a quality finding.
  * @param check The CSS check that produced the finding.
  * @param message The explanation shown to the recipe author.
- * @param node The parsed CSS node locating the problem.
+ * @param node A class selector or declaration parsed with source positions enabled.
  */
-function finding(check: StyleFinding["check"], message: string, node: CssNode): StyleFinding {
-  const { line = 1, column = 1 } = node.loc?.start ?? {};
+function finding(
+  check: StyleFinding["check"],
+  message: string,
+  node: ClassSelector | Declaration,
+): StyleFinding {
+  const { line, column } = node.loc!.start;
   return { check, message: `styles:${line}:${column} ${message} (${check})` };
 }
 

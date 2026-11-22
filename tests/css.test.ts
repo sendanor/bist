@@ -19,6 +19,13 @@ describe("recipe stylesheets", () => {
     assert.match(text, /color: var\(--accent\);/u);
   });
 
+  it("keeps the original offsets of findings inside nested rules", async () => {
+    const input = "@media (width >= 20rem) {\n  .allowed .Invalid-2 { color: sideways; }\n}";
+    const { findings } = await normalizeStyles(input, {});
+    assert.match(findings[0].message, /^styles:2:12 .*Invalid-2/u);
+    assert.match(findings[1].message, /^styles:2:25 /u);
+  });
+
   it("rejects formatting and lint suppression directives at their source location", async () => {
     for (const directive of ["prettier-ignore", "stylelint-disable", "stylelint-enable"]) {
       await assert.rejects(normalizeStyles("\n/* " + directive + " */\na{color:red}", {}), {
