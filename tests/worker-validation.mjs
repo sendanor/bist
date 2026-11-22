@@ -31,6 +31,10 @@ async function verifyProtocol(dispatch) {
   const discover = await (await rpc("server/discover")).json();
   assert.equal(discover.id, "fixture-rpc");
   assert.ok(discover.result.supportedVersions.length);
+  const bareInitialize = await dispatch("/mcp", null, { jsonrpc: "2.0", method: "initialize" });
+  const initialized = await bareInitialize.json();
+  assert.equal(initialized.id, null);
+  assert.equal(initialized.result.protocolVersion, "2025-06-18");
   for (const [offered, expected] of [
     ["2025-11-25", "2025-11-25"],
     ["unknown", "2025-06-18"],
@@ -67,7 +71,13 @@ async function verifyProtocol(dispatch) {
   assert.match(css.headers.get("content-type"), /^text\/css/u);
   assert.match(await css.text(), /\.recipe-part/u);
   assert.equal((await dispatch("/api/mine", "author")).status, 200);
+  const withoutArguments = await rpc("tools/call", { name: "search_recipes" }, "author");
+  assert.equal(withoutArguments.status, 200);
+  const { result } = await withoutArguments.json();
+  assert.equal(result.isError, undefined);
+  assert.ok(Array.isArray(JSON.parse(result.content[0].text).items));
   await expectError(dispatch, "/api/unknown", "author", undefined, 404, /Route not found/u);
+  await expectError(dispatch, "/api/unknown", "author", {}, 404, /Route not found/u);
 }
 
 /**
@@ -79,6 +89,7 @@ async function verifySettingsValidation(dispatch) {
     ["/api/settings/openai", {}, /Enter an OpenAI API key or choose a model/u],
     ["/api/settings/openai", { model: "invalid model" }, /valid OpenAI model identifier/u],
     ["/api/settings/openai", { apiKey: "!" }, /valid OpenAI API key/u],
+    ["/api/settings/openai", { apiKey: 1234 }, /valid OpenAI API key/u],
     ["/api/settings/llm-review", { enabled: true, rules: [] }, /review mode and rules/u],
     [
       "/api/settings/llm-review",
@@ -196,6 +207,14 @@ async function verifyRecipeValidation(dispatch) {
     400,
     /up to 12 terms/u,
   );
+  await expectError(
+    dispatch,
+    "/api/search?cursor=next",
+    "reader",
+    undefined,
+    400,
+    /Invalid page cursor/u,
+  );
   const search = new URLSearchParams(
     Array.from({ length: 9 }, (_, index) => ["tag", "tag-" + index]),
   );
@@ -310,6 +329,41 @@ async function verifyStoredData(dispatch, db) {
   );
   assert.equal(comment.status, 201);
   assert.equal((await comment.json()).authorName, "maintainer");
+  const withoutName = await dispatch(
+    "/api/comment",
+    "maintainer",
+    { ...target, part: "documentation", line: null, body: "Check an empty reviewer name." },
+    { "oai-authenticated-user-full-name": "%E2%80%8B" },
+  );
+  assert.equal(withoutName.status, 201);
+  assert.equal((await withoutName.json()).authorName, null);
+  await db
+    .prepare(
+      "CREATE TRIGGER skip_test_comment BEFORE INSERT ON revision_comments BEGIN SELECT RAISE(IGNORE); END",
+    )
+    .run();
+  try {
+    await expectError(
+      dispatch,
+      "/api/comment",
+      "maintainer",
+      {
+        ...target,
+        part: "documentation",
+        line: null,
+        body: "This write must not be acknowledged.",
+      },
+      409,
+      /Reload it before adding a comment/u,
+    );
+  } finally {
+    await db.prepare("DROP TRIGGER skip_test_comment").run();
+  }
+  const count = await db
+    .prepare("SELECT count(*) AS total FROM revision_comments WHERE revision = ?")
+    .bind(saved.id)
+    .first();
+  assert.equal(count.total, 2);
   const anonymousName = await dispatch("/api/session", "identity-fixture", undefined, {
     "oai-authenticated-user-email": "",
     "oai-authenticated-user-full-name": " ",
@@ -384,6 +438,15 @@ async function verifyStoredData(dispatch, db) {
   const savedCodePolicy = await codePolicy.first();
   assert.ok(savedCodePolicy);
   try {
+    await db
+      .prepare("UPDATE code_policy SET config = ? WHERE id = 1")
+      .bind(JSON.stringify({ prettier: { printWidth: 92 } }))
+      .run();
+    const legacy = await dispatch("/api/settings", "maintainer");
+    assert.equal(legacy.status, 200);
+    const { policy } = await legacy.json();
+    assert.equal(policy.prettier.printWidth, 92);
+    assert.equal(policy.eslint["quality/documentation"], "error");
     await db.prepare("UPDATE code_policy SET config = '[]' WHERE id = 1").run();
     const invalid = await dispatch("/api/settings", "maintainer");
     assert.equal(invalid.status, 500);

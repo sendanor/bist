@@ -29,6 +29,16 @@ export async function verifyReviewOnboarding(dispatch, db, key) {
       db.prepare("DELETE FROM openai_rate_limits WHERE action = 'settings'"),
     ]);
     assert.deepEqual(await readPolicy(), offered);
+    const withoutModel = await dispatch(connection, "maintainer", { reasoningEffort: "low" });
+    assert.equal(withoutModel.status, 400);
+    assert.match((await withoutModel.json()).error, /reasoning effort supported/u);
+    const reviewWithoutModel = await dispatch(path, "maintainer", {
+      ...offered,
+      model: "",
+      reasoningEffort: "low",
+    });
+    assert.equal(reviewWithoutModel.status, 400);
+    assert.match((await reviewWithoutModel.json()).error, /valid review model/u);
     assert.equal((await dispatch(connection, "maintainer", first)).status, 200);
     assert.deepEqual(await readPolicy(), offered);
     assert.equal((await dispatch(connection, "maintainer", second)).status, 200);
