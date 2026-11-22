@@ -314,6 +314,17 @@ async function verifyLibrarySearch(window) {
     () => document.querySelectorAll(".recipe").length === 1,
     "only the published fixture matches",
   );
+  const invalidEscape = 'tag:"\\U0041"';
+  const tagForm = document.querySelector("form.search");
+  tagForm.elements.query.value = invalidEscape;
+  tagForm.requestSubmit();
+  assert.equal(new URLSearchParams(window.location.search).get("query"), invalidEscape);
+  assert.deepEqual(new URLSearchParams(window.location.search).getAll("tag"), []);
+  await eventually(
+    () => !tagForm.isConnected,
+    "malformed tag syntax stays part of the keyword search",
+  );
+  assert.equal(document.querySelector('input[name="query"]').value, invalidEscape);
   document.querySelector('input[name="query"]').value = "intentionally absent cookbook phrase";
   document.querySelector("form.search").requestSubmit();
   await eventually(
@@ -566,6 +577,71 @@ async function verifyReviewerComments(window) {
 }
 
 /**
+ * Keep review anchors visible after the author changes a line or removes its file.
+ * @param window Maintainer's window used to open the edited fixture.
+ * @param dispatch Authenticated transport to create and amend a disposable draft.
+ */
+async function verifyHistoricalComments(window, dispatch) {
+  const actor = "historical-comment-fixture";
+  const recipe = {
+    slug: actor,
+    title: "Archived review anchors",
+    summary: "Show review feedback on replaced text and deleted files.",
+    files: {
+      documentation: "# Original comment anchor\n\nExample for the first version.",
+      instructions: "Original instructions retained only in the review history.",
+    },
+  };
+  const submission = await dispatch("/api/submit", actor, recipe);
+  assert.equal(submission.status, 201);
+  const { id, editVersion } = await submission.json();
+  for (const [part, line, body] of [
+    ["documentation", 1, "Preserve the old line reference."],
+    ["instructions", null, "Preserve the removed file feedback."],
+  ]) {
+    const response = await dispatch("/api/comment", "maintainer", {
+      slug: recipe.slug,
+      revision: id,
+      editVersion,
+      part,
+      line,
+      body,
+    });
+    assert.equal(response.status, 201);
+  }
+  const replacement = await dispatch("/api/submit", actor, {
+    ...recipe,
+    replace: id,
+    editVersion,
+    files: { documentation: "# Revised comment anchor\n\nThe original line has changed." },
+  });
+  assert.equal(replacement.status, 200);
+  const updated = await replacement.json();
+  assert.equal(updated.id, id);
+  assert.equal(updated.editVersion, editVersion + 1);
+  const path = "/recipe/review/" + recipe.slug + "/" + id;
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  const docs = "#recipe-part-title-documentation";
+  const archived = ".earlier-comments";
+  const view = window.document.querySelector("#view");
+  await eventually(
+    () => view.querySelector("h1")?.textContent === recipe.title,
+    "edited draft opened",
+  );
+  const line = view.querySelector(docs).closest("section").querySelector(archived);
+  assert.match(line.textContent, /Line 1 · # Original comment anchor/u);
+  assert.match(line.textContent, /Preserve the old line reference/u);
+  const file = view.querySelector("#recipe-part-title-instructions").closest("section");
+  assert.match(file.querySelector(archived).textContent, /Preserve the removed file feedback/u);
+  assert.match(file.querySelector(archived).textContent, /Whole file/u);
+  assert.match(
+    file.querySelector("#recipe-part-content-instructions").textContent,
+    /omits this file/u,
+  );
+}
+
+/**
  * Apply an advisory result in the open recipe without losing the current browser view.
  * @param window Maintainer's current review page.
  */
@@ -772,6 +848,40 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   form.requestSubmit();
   await eventually(() => byline()?.querySelector(".state-quarantined"), "quarantine shown");
   assert.equal((await dispatch("/api/recipe?" + query, "reader")).status, 404);
+  const quarantined = window.location.pathname;
+  window.history.pushState(null, "", "/edit/" + draft.slug + "/" + draft.revision);
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  await eventually(
+    () =>
+      document.querySelector("#view").textContent.includes("This draft can no longer be edited."),
+    "stale editor bookmark explains the revision state",
+  );
+  window.history.back();
+  await eventually(
+    () => window.location.pathname === quarantined && byline()?.querySelector(".state-quarantined"),
+    "returned to the quarantined revision",
+  );
+  choose("Request removal");
+  const removal = document.querySelector("dialog form");
+  removal.elements.reason.value = "Remove the quarantined browser fixture.";
+  removal.requestSubmit();
+  await eventually(
+    () =>
+      document
+        .querySelector("#view")
+        .textContent.includes("Remove the quarantined browser fixture."),
+    "removal reason shown in the revision",
+  );
+  choose("Approve removal");
+  document.querySelector("dialog form").requestSubmit();
+  await eventually(
+    () =>
+      window.location.pathname === "/review" &&
+      document.querySelector("#view h1")?.textContent === "Review queue",
+    "approved removal returns the maintainer to the review queue",
+  );
+  query.set("revision", draft.revision);
+  assert.equal((await dispatch("/api/recipe?" + query, "maintainer")).status, 404);
 }
 
 /**
@@ -1107,6 +1217,27 @@ async function verifySignedOutNavigation(dispatch, directory) {
 }
 
 /**
+ * Reopen the docked Assistant from its old standalone URL and preserve the library query.
+ * @param window Maintainer's initialized browser window.
+ */
+async function verifyLegacyAssistantRoute(window) {
+  const { document, history, location } = window;
+  history.replaceState(null, "", "/?query=paging#retired-page");
+  window.dispatchEvent(new window.HashChangeEvent("hashchange"));
+  assert.equal(location.hash, "#retired-page");
+  history.replaceState(null, "", "/?query=paging#assistant");
+  window.dispatchEvent(new window.HashChangeEvent("hashchange"));
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Recipe library",
+    "legacy Assistant bookmark opens the library and docked chat",
+  );
+  assert.equal(location.pathname, "/library");
+  assert.equal(location.hash, "");
+  assert.equal(location.search, "?query=paging");
+  assert.equal(document.querySelector("#assistant-panel").hidden, false);
+}
+
+/**
  * Edit the README in a draft, inspect its diff and discard that working copy.
  * @param window Author's initialized recipe test window.
  */
@@ -1176,6 +1307,7 @@ async function verifyEditorRecovery(window) {
   const fetch = window.fetch;
   const failedSuggestion = Promise.withResolvers();
   const staleSuggestion = Promise.withResolvers();
+  const cancelledSuggestion = Promise.withResolvers();
   const failedSave = Promise.withResolvers();
   const signals = [];
   let saves = 0;
@@ -1190,6 +1322,9 @@ async function verifyEditorRecovery(window) {
       signals.push(options.signal);
       if (signals.length === 3) {
         return Promise.resolve(Response.json({ content: JSON.parse(options.body).content }));
+      }
+      if (signals.length === 4) {
+        return cancelledSuggestion.promise;
       }
       return (signals.length === 1 ? failedSuggestion : staleSuggestion).promise;
     }
@@ -1261,6 +1396,12 @@ async function verifyEditorRecovery(window) {
       "identical model output shown as unchanged",
     );
     assert.equal(input.value, manual);
+    clickText(dialog, "button", "Suggest edit");
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(signals[3].aborted, true);
+    cancelledSuggestion.reject(new window.DOMException("Cancelled by the author", "AbortError"));
+    await setTimeout(0);
+    assert.doesNotMatch(status.textContent, /Cancelled by the author/u);
     const save = dialog.querySelector("button.primary");
     save.click();
     const escape = new window.Event("cancel", { cancelable: true });
@@ -1354,6 +1495,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
     await verifyMaintainerNavigation(maintainer, dispatch, key);
     await verifyAssistantStartup(maintainer);
     await verifyAssistant(maintainer);
+    await verifyLegacyAssistantRoute(maintainer);
     assert.ok(maintainer.__coverage__["src/browser.js"]);
     await writeFile(
       join(directory, "browser-maintainer.json"),
@@ -1383,6 +1525,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
   try {
     await verifyReviewerComments(reviewer);
     await verifyReviewDecisions(reviewer, dispatch, draft);
+    await verifyHistoricalComments(reviewer, dispatch);
     await writeFile(
       join(directory, "browser-reviewer.json"),
       JSON.stringify(reviewer.__coverage__),
