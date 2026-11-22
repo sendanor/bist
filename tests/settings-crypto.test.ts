@@ -24,3 +24,12 @@ test("OpenAI settings use randomized authenticated ciphertext", async () => {
     SettingsCryptoError,
   );
 });
+
+test("reads an existing v1 envelope with a mixed-case hexadecimal deployment key", async () => {
+  const deploymentKey = "aF0c".repeat(16);
+  const envelope =
+    "v1.000102030405060708090a0b." +
+    "1e03c60311232dc926fcfda4cb743a0ddfb8967976586642fcf501bbb325a9ecfa8d18f585cad14785";
+  assert.equal(await openOpenAiKey(deploymentKey, envelope), "legacy-fixture-credential");
+  await assert.rejects(openOpenAiKey(deploymentKey, envelope + "f"), SettingsCryptoError);
+});

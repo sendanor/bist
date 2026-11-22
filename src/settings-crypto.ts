@@ -26,7 +26,12 @@ export function isSettingsKey(value: unknown): value is string {
  * @param value An even-length hexadecimal string.
  */
 function bytes(value: string) {
-  return Uint8Array.from(value.match(/../gu) ?? [], (pair) => Number.parseInt(pair, 16));
+  const decoded = new Uint8Array(value.length / 2);
+  for (let index = 0; index < decoded.length; index++) {
+    const offset = index * 2;
+    decoded[index] = Number.parseInt(value.slice(offset, offset + 2), 16);
+  }
+  return decoded;
 }
 
 /**
