@@ -17,8 +17,9 @@ built for release as public.
 - Document named JS and TS callables, including methods and test helpers, with JSDoc.
   Explain their purpose and each parameter. Describe applicable constraints, side
   effects, and explicit exceptions.
-- Run `npm run check` and `npm test` for code changes. See [QUALITY.md](QUALITY.md)
-  for the checks and their scope.
+- Run `npm run check`, `npm test` and `npm run check:coverage` for code changes.
+  The coverage gate requires 100% line, branch and function coverage. See
+  [QUALITY.md](QUALITY.md) for the checks and their scope.
 - Always stage and commit your changes when the task is complete. Keep each
   commit small and focused, and use a message that describes what it changes.
 - After validating and committing application changes, deploy the matching
