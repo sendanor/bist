@@ -203,6 +203,24 @@ async function verifyRecipeValidation(dispatch) {
     400,
     /up to eight tags/u,
   );
+  const tags = search.getAll("tag").slice(0, 8);
+  for (const tag of [tags[0].toUpperCase(), "ninth-distinct-tag"]) {
+    const response = await dispatch("/mcp", "reader", {
+      jsonrpc: "2.0",
+      id: "tag-boundary",
+      method: "tools/call",
+      params: { name: "search_recipes", arguments: { tags, tag } },
+    });
+    assert.equal(response.status, 200);
+    const { result } = await response.json();
+    if (tag === "ninth-distinct-tag") {
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /up to eight tags/u);
+    } else {
+      assert.equal(result.isError, undefined);
+      assert.deepEqual(JSON.parse(result.content[0].text).items, []);
+    }
+  }
   await expectError(
     dispatch,
     "/api/recipe?slug=validation-edge-fixture&parts=oops",
@@ -296,6 +314,21 @@ async function verifyStoredData(dispatch, db) {
     (await (await dispatch(detail, "author")).json()).files.documentation,
     recipe.files.documentation + "\n",
   );
+  const codePolicy = db.prepare("SELECT config FROM code_policy WHERE id = 1");
+  const savedCodePolicy = await codePolicy.first();
+  assert.ok(savedCodePolicy);
+  try {
+    await db.prepare("UPDATE code_policy SET config = '[]' WHERE id = 1").run();
+    const invalid = await dispatch("/api/settings", "maintainer");
+    assert.equal(invalid.status, 500);
+    assert.deepEqual(await invalid.json(), { error: "The operation failed. Please retry." });
+  } finally {
+    await db
+      .prepare("UPDATE code_policy SET config = ? WHERE id = 1")
+      .bind(savedCodePolicy.config)
+      .run();
+  }
+  assert.equal((await dispatch("/api/settings", "maintainer")).status, 200);
   const storedPolicy = await db
     .prepare("SELECT policy FROM llm_review_settings WHERE id = 1")
     .first();
