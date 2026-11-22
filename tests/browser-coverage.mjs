@@ -245,6 +245,10 @@ async function verifyAssistant(window) {
     assert.equal(workspace.style.getPropertyValue("--assistant-width"), "");
     const start = new window.MouseEvent("pointerdown", { button: 0, cancelable: true });
     Object.defineProperty(start, "pointerId", { value: 1 });
+    const secondary = new window.MouseEvent("pointerdown", { button: 2, cancelable: true });
+    handle.dispatchEvent(secondary);
+    assert.equal(secondary.defaultPrevented, false);
+    assert.equal(captured, undefined);
     handle.dispatchEvent(start);
     assert.equal(start.defaultPrevented, true);
     handle.dispatchEvent(drag);
@@ -259,6 +263,10 @@ async function verifyAssistant(window) {
     handle.dispatchEvent(
       new window.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
     );
+    assert.equal(workspace.style.getPropertyValue("--assistant-width"), "499px");
+    const unrelated = new window.KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+    handle.dispatchEvent(unrelated);
+    assert.equal(unrelated.defaultPrevented, false);
     assert.equal(workspace.style.getPropertyValue("--assistant-width"), "499px");
     form.elements.question.value = "A draft that survives closing.";
     panel.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -279,9 +287,70 @@ async function verifyAssistant(window) {
     assert.ok(Buffer.byteLength(JSON.stringify(history)) <= 12_000);
     assert.equal(history.at(-1).content, "答".repeat(1_200));
     assert.ok(!history.some(({ content }) => content === "Give one example."));
-    document.querySelector("#assistant-close").click();
+    toggle.click();
+    assert.equal(panel.hidden, true);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
   } finally {
     window.fetch = fetch;
+  }
+}
+
+/**
+ * Keep native link handling for modified clicks, alternate targets, downloads and fragments.
+ * @param window Initialized browser window with the app's document click listener installed.
+ */
+function verifyNativeLinkHandling(window) {
+  const { document, location } = window;
+  const link = document.createElement("a");
+  link.href = "/library";
+  link.textContent = "Open library";
+  document.body.append(link);
+  let intercepted;
+  /**
+   * Observe the app's decision, then suppress jsdom's unsupported native navigation.
+   * @param event Click after it has bubbled through the application.
+   */
+  const observe = (event) => {
+    intercepted = event.defaultPrevented;
+    event.preventDefault();
+  };
+  window.addEventListener("click", observe);
+  const original = location.href;
+  try {
+    for (const options of [
+      { button: 1 },
+      { metaKey: true },
+      { ctrlKey: true },
+      { shiftKey: true },
+      { altKey: true },
+    ]) {
+      link.dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, cancelable: true, ...options }),
+      );
+      assert.equal(intercepted, false);
+      assert.equal(location.href, original);
+    }
+    for (const [attribute, value] of [
+      ["target", "_blank"],
+      ["download", ""],
+      ["href", "/library#recipes"],
+    ]) {
+      link.setAttribute(attribute, value);
+      link.click();
+      assert.equal(intercepted, false);
+      assert.equal(location.href, original);
+      link.removeAttribute(attribute);
+      link.href = "/library";
+    }
+    document.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    assert.equal(intercepted, false);
+    link.target = "_self";
+    link.click();
+    assert.equal(intercepted, true);
+    assert.equal(location.href, original);
+  } finally {
+    window.removeEventListener("click", observe);
+    link.remove();
   }
 }
 
@@ -772,6 +841,7 @@ async function verifyRecheckFeedback(window) {
       checkedParts: ["documentation"],
       warnings: [{ part: "documentation", reason: "Describe the input." }],
     },
+    { checkedParts: ["documentation"], warnings: [] },
     { checkedParts: [], warnings: [] },
   ];
   const pending = Promise.withResolvers();
@@ -785,7 +855,7 @@ async function verifyRecheckFeedback(window) {
       return fetch(path, options);
     }
     const report = reports.shift();
-    if (reports.length === 1) {
+    if (report.warnings.length) {
       return pending.promise;
     }
     return Promise.resolve(Response.json({ ...report, savedWarnings: report.warnings }));
@@ -795,13 +865,17 @@ async function verifyRecheckFeedback(window) {
     const docs = document.querySelector(
       'section[aria-labelledby="recipe-part-title-documentation"]',
     );
-    for (const pattern of [/Review warnings appear/u, /None of this revision/u]) {
+    for (const pattern of [
+      /Review warnings appear/u,
+      /found no warnings/u,
+      /None of this revision/u,
+    ]) {
       document.querySelector(".revision-trigger").click();
       clickText(document.querySelector(".revision-menu"), "button", "Re-run LLM review");
-      if (reports.length === 1) {
+      if (reports.length === 2) {
         document.querySelector(".revision-trigger").click();
         clickText(document.querySelector(".revision-menu"), "button", "Re-run LLM review");
-        assert.equal(reports.length, 1, "second click must not start another check");
+        assert.equal(reports.length, 2, "second click must not start another check");
         const findings = [{ part: "documentation", reason: "Describe the input." }];
         pending.resolve(
           Response.json({
@@ -813,7 +887,7 @@ async function verifyRecheckFeedback(window) {
       }
       await eventually(() => pattern.test(recheck.textContent), "recheck summary updated");
       const warning = docs.querySelector(".file-warnings");
-      assert.equal(warning.hidden, reports.length === 0);
+      assert.equal(warning.hidden, reports.length !== 2);
       if (!warning.hidden) {
         assert.equal(warning.textContent, "Describe the input.");
       }
@@ -1317,6 +1391,27 @@ async function verifyMaintainerNavigation(window, dispatch, key) {
     checked.map((tool) => tool.value),
     ["search_recipes"],
   );
+  replyOnce(
+    window,
+    "/api/settings/openai",
+    Response.json({
+      model: null,
+      reasoningEffort: "",
+      hasCredential: false,
+      encryptionAvailable: false,
+      configured: false,
+    }),
+  );
+  document.querySelector('nav a[href="/settings/openai"]').click();
+  await eventually(
+    () =>
+      document.querySelector("#view").textContent.includes("deployment needs an encryption key"),
+    "missing deployment encryption key explained",
+  );
+  const credential = document.querySelector('input[name="apiKey"]');
+  assert.equal(credential.disabled, true);
+  assert.ok(credential.form.querySelector('a[href="/settings/llm-review"]'));
+  assert.equal(document.querySelector('select[name="model"]').disabled, true);
 }
 
 /**
@@ -1618,6 +1713,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
   const maintainer = await openPage(dispatch, "/library", "maintainer");
   try {
     await verifyLibrarySearch(maintainer);
+    verifyNativeLinkHandling(maintainer);
     await verifyListingRace(maintainer);
     await verifyMaintainerNavigation(maintainer, dispatch, key);
     await verifyAssistantStartup(maintainer);
