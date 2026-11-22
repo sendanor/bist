@@ -76,6 +76,15 @@ const cases = [
     "documentation",
     "/** Count provided values.\n * @param values Remaining items to count.\n */\nfunction count(...values: number[]) { return values.length; }",
   ],
+  [
+    "documentation",
+    "/** Return the selected count.\n * @param options Batch settings supplied by the caller.\n */\nfunction read({ count }: Options) { return count; }",
+  ],
+  [
+    "documentation",
+    "/** Return the selected count. */\nfunction read({ count }: Options) { return count; }",
+    /parameter 1/u,
+  ],
   ["document-throws", "function f() { throw new TypeError('reason'); }", /TypeError/],
   ["document-throws", "throw new Error('module initialization failed');"],
   ["document-throws", "function f() { try { throw new Error('handled'); } catch {} }"],
@@ -88,6 +97,7 @@ const cases = [
     "/** Load the recipe snapshot.\n * @throws {TypeError} When the count is negative.\n */\nasync function f() { throw new RangeError(); }",
     /RangeError/,
   ],
+  ["document-throws", "queueMicrotask(() => { throw failure; });", /this error/u],
   ["promise-chains", "const x = input.then(fn).catch(onError);", /prefer await/i],
   ["promise-chains", "async function f() { try { return await input; } catch {} }"],
   ["promise-all", "async function f() { await Promise.all(jobs); }", /continue after/i],
@@ -136,6 +146,8 @@ const cases = [
   ],
   ["readonly-input", "function f(list: number[]) { return list.length; }", /readonly array/i],
   ["readonly-input", "function f(list: Array<number>) { list.push(1); }"],
+  ["readonly-input", "function f(list: number[]) { list[0] = 4; }"],
+  ["readonly-input", "function f(list: number[]) { delete list[0]; }"],
   ["readonly-input", "function f(list: number[]) { list[0]++; }"],
   ["readonly-input", "function f(list: number[]) { list = []; return list.length; }"],
   ["readonly-input", "function f(list: readonly number[]) { return list.length; }"],
@@ -147,6 +159,8 @@ const cases = [
   ["named-guards", "if (isArray(input)) {}"],
   ["named-guards", "const isId = /^[0-9a-f]{12}$/.test(input);", /named UUID guard/i],
   ["localize-jsx", "const title = <h1>Recipe title</h1>;", /translation catalog/i],
+  ["localize-jsx", "const count = <span data-id={'internal-key'}>42</span>;"],
+  ["localize-jsx", "const help = <input aria-label={'Search recipes'} />;", /translation catalog/i],
   ["localize-jsx", "const search = <input placeholder='Find recipes' />;", /translation catalog/i],
   ["localize-jsx", "const title = <h1>{t('title')}</h1>;"],
   ["localize-jsx", "const title = <h1>{`Welcome ${name}`}</h1>;", /translation catalog/i],
@@ -160,6 +174,9 @@ const cases = [
     "export function Panel() { window.fetch('/api'); return <p/>; }",
     /injected service/i,
   ],
+  ["browser-boundaries", "const view = <>{globalThis.fetch(url)}</>;", /injected service/i],
+  ["browser-boundaries", "const view = <>{navigator.sendBeacon(url)}</>;", /injected service/i],
+  ["browser-boundaries", "const view = <>{new service.WebSocket(url)}</>;"],
   [
     "browser-boundaries",
     "export function Panel() { const state = localStorage.getItem('a'); return <p>{state}</p>; }",
@@ -204,6 +221,8 @@ test("size counts only code lines and allows a scoped exception", () => {
   assert.deepEqual(check("function-size", `function f() {\n${boilerplate}}`), []);
   assert.match(check("function-size", `function f() {\n${big}}`)[0].message, /103 code lines/);
   assert.match(check("file-size", big.repeat(5))[0].message, /505 code lines/);
+  const template = "function f() { return `first\n" + "\n".repeat(110) + "last`; }";
+  assert.deepEqual(check("function-size", template), []);
 });
 
 test("custom recipe filenames resolve ESM and CommonJS aliases without choosing an ambiguous stem", () => {
