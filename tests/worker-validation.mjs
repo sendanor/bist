@@ -160,6 +160,10 @@ async function verifyRecipeValidation(dispatch) {
       { files: { styles: ".recipe{color:red}\n".repeat(480) } },
       /Styles exceed 12 KB after formatting/u,
     ],
+    [
+      { files: { source: "export const wide = [" + "1,".repeat(4_500) + "];" } },
+      /source exceeds 12 KB after formatting/u,
+    ],
   ]) {
     await expectError(dispatch, "/api/submit", "author", { ...recipe, ...overrides }, 400, detail);
   }
@@ -229,6 +233,54 @@ async function verifyRecipeValidation(dispatch) {
     400,
     /Select supported file parts/u,
   );
+}
+
+/**
+ * Distinguish module boundaries from type diagnostics when maintainers adjust lint rules.
+ * @param dispatch Authenticated transport to the disposable Worker.
+ */
+async function verifyVirtualModules(dispatch) {
+  const settingsPath = "/api/settings";
+  const { policy } = await (await dispatch(settingsPath, "maintainer")).json();
+  const recipe = {
+    slug: "module-diagnostic-fixture",
+    title: "Virtual module boundaries",
+    summary: "Check that the recipe compiler reports unavailable modules in the importing file.",
+  };
+  await expectError(
+    dispatch,
+    "/api/submit",
+    "author",
+    {
+      ...recipe,
+      files: {
+        interface: 'export type Shared = import("./source.js").Result;',
+        source: "export type Result = string;",
+      },
+    },
+    400,
+    /interface:1:\d+ .*public interface must stand on its own/u,
+  );
+  const compilerOnly = {
+    ...policy,
+    eslint: { ...policy.eslint, "quality/recipe-imports": "off" },
+    quality: { ...policy.quality, typeCheck: "error" },
+  };
+  assert.equal((await dispatch(settingsPath, "maintainer", compilerOnly)).status, 200);
+  try {
+    for (const specifier of ["./interface.js", "./absent-module.js"]) {
+      const response = await dispatch("/api/submit", "author", {
+        ...recipe,
+        files: { source: `export type RecipeValue = import("${specifier}").Shared;` },
+      });
+      assert.equal(response.status, 400);
+      const { error } = await response.json();
+      assert.match(error, /^source:1:\d+ .*TS2307/u);
+      assert.ok(error.includes(specifier));
+    }
+  } finally {
+    assert.equal((await dispatch(settingsPath, "maintainer", policy)).status, 200);
+  }
 }
 
 /**
@@ -590,6 +642,7 @@ export async function verifyWorkerValidation(dispatch, db) {
   await verifyProtocol(dispatch);
   await verifySettingsValidation(dispatch);
   await verifyRecipeValidation(dispatch);
+  await verifyVirtualModules(dispatch);
   await verifyStoredData(dispatch, db);
   await verifyProviderStorage(dispatch, db);
   await verifyStoredAddOnSelections(dispatch, db);
