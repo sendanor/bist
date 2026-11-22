@@ -59,6 +59,20 @@ test("fingerprints TypeScript angle-bracket assertions as code", async () => {
   assert.notEqual(cast.snapshot, different.snapshot);
 });
 
+test("fingerprints incomplete legacy snapshots without dropping their code", async () => {
+  const incomplete = "export const broken = ;";
+  const original = await fingerprintRecipe({ source: incomplete });
+  assert.match(original.snapshot ?? "", /^[a-f0-9]{64}$/u);
+  assert.equal(
+    original.snapshot,
+    (await fingerprintRecipe({ source: "\n" + incomplete })).snapshot,
+  );
+  assert.notEqual(
+    original.snapshot,
+    (await fingerprintRecipe({ source: "export const repaired = ;" })).snapshot,
+  );
+});
+
 test("includes compiler directives and reports blank content as absent", async () => {
   const plain = "export const message = 1;";
   const ordinary = await fingerprintRecipe({ source: "// An ordinary comment.\n" + plain });
