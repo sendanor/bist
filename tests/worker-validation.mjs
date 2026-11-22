@@ -326,6 +326,128 @@ async function verifyStoredData(dispatch, db) {
 }
 
 /**
+ * Check that rate limits reject quota-exhausted requests before contacting a provider.
+ * @param dispatch Request transport for the disposable Worker.
+ * @param db Local D1 database containing synthetic quota state.
+ */
+async function verifyProviderQuotas(dispatch, db) {
+  const catalogLimit = db.prepare(
+    "SELECT window, hits FROM openai_rate_limits WHERE actor = 'maintainer' AND action = 'catalog'",
+  );
+  const existing = await catalogLimit.first();
+  const reviewSettings = "/api/settings/llm-review";
+  const policy = await (await dispatch(reviewSettings, "maintainer")).json();
+  try {
+    await db
+      .prepare(
+        "INSERT INTO openai_rate_limits (actor, action, window, hits) VALUES ('maintainer', 'catalog', unixepoch(), 12) ON CONFLICT(actor, action) DO UPDATE SET window = excluded.window, hits = excluded.hits",
+      )
+      .run();
+    await expectError(
+      dispatch,
+      "/api/assistant/models",
+      "maintainer",
+      undefined,
+      429,
+      /Too many OpenAI requests/u,
+    );
+    assert.equal(
+      (
+        await dispatch(reviewSettings, "maintainer", {
+          ...policy,
+          enabled: true,
+          model: "gpt-6.2-sol",
+          rules: { documentation: { mode: "warn", instruction: "Describe the expected result." } },
+        })
+      ).status,
+      200,
+    );
+    await db
+      .prepare(
+        "INSERT INTO openai_rate_limits (actor, action, window, hits) VALUES ('quota-fixture', 'review', unixepoch(), 6)",
+      )
+      .run();
+    const response = await dispatch("/mcp", "quota-fixture", {
+      jsonrpc: "2.0",
+      id: "quota-check",
+      method: "tools/call",
+      params: {
+        name: "submit_recipe",
+        arguments: {
+          slug: "review-quota-fixture",
+          title: "Review queue",
+          summary: "Verify that review quota prevents a provider call.",
+          files: { documentation: "The fixture checks rate-limited review." },
+        },
+      },
+    });
+    assert.equal(response.status, 200);
+    const { result } = await response.json();
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Too many LLM review requests/u);
+    assert.equal(result.structuredContent, undefined);
+    assert.equal(
+      await db.prepare("SELECT id FROM revisions WHERE slug = 'review-quota-fixture'").first(),
+      null,
+    );
+  } finally {
+    assert.equal((await dispatch(reviewSettings, "maintainer", policy)).status, 200);
+    if (existing) {
+      await db
+        .prepare(
+          "UPDATE openai_rate_limits SET window = ?, hits = ? WHERE actor = 'maintainer' AND action = 'catalog'",
+        )
+        .bind(existing.window, existing.hits)
+        .run();
+    } else {
+      await db
+        .prepare("DELETE FROM openai_rate_limits WHERE actor = 'maintainer' AND action = 'catalog'")
+        .run();
+    }
+  }
+}
+
+/**
+ * Verify submissions retry after a bounded batch of legacy fingerprints is rebuilt.
+ * @param dispatch Request transport to the disposable Worker.
+ * @param db Local D1 binding populated with legacy fixtures for this check.
+ */
+async function verifyLegacyBatch(dispatch, db) {
+  const slug = "legacy-batch-fixture";
+  await db.batch([
+    db.prepare("INSERT INTO recipes (slug, owner) VALUES (?, 'legacy-fixture')").bind(slug),
+    ...Array.from({ length: 25 }, (_, index) =>
+      db
+        .prepare(
+          "INSERT INTO revisions (id, slug, author, title, summary, tags, files, state, fingerprints_ready) VALUES (?, ?, 'legacy-fixture', 'Legacy fixture', 'Awaiting fingerprinting', '[]', ?, 'quarantined', 0)",
+        )
+        .bind(
+          "10000000-0000-4000-8000-" + String(index).padStart(12, "0"),
+          slug,
+          JSON.stringify({ documentation: "Archived fixture " + index }),
+        ),
+    ),
+  ]);
+  const recipe = {
+    slug: "legacy-batch-retry-fixture",
+    title: "Retry after indexing",
+    summary: "Verify normal submission resumes after batched indexing.",
+    files: { documentation: "Wait until the archived fixtures have fingerprints." },
+  };
+  const remaining = db
+    .prepare("SELECT count(*) AS total FROM revisions WHERE slug = ? AND fingerprints_ready = 0")
+    .bind(slug);
+  await expectError(dispatch, "/api/submit", "author", recipe, 503, /still being indexed/u);
+  assert.equal((await remaining.first()).total, 1);
+  assert.equal(
+    await db.prepare("SELECT id FROM revisions WHERE slug = ?").bind(recipe.slug).first(),
+    null,
+  );
+  assert.equal((await dispatch("/api/submit", "author", recipe)).status, 201);
+  assert.equal((await remaining.first()).total, 0);
+}
+
+/**
  * Test the public Worker boundary, including invalid input and malformed stored fixture values.
  * @param dispatch Request transport bound to the local instance.
  * @param db Disposable Worker database containing synthetic test records.
@@ -335,4 +457,6 @@ export async function verifyWorkerValidation(dispatch, db) {
   await verifySettingsValidation(dispatch);
   await verifyRecipeValidation(dispatch);
   await verifyStoredData(dispatch, db);
+  await verifyProviderQuotas(dispatch, db);
+  await verifyLegacyBatch(dispatch, db);
 }
