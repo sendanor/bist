@@ -382,6 +382,110 @@ async function verifyReviewerComments(window) {
 }
 
 /**
+ * Apply an advisory result in the open recipe without losing the current browser view.
+ * @param window Maintainer's current review page.
+ */
+async function verifyRecheckFeedback(window) {
+  const { document } = window;
+  const fetch = window.fetch;
+  const reports = [
+    {
+      checkedParts: ["documentation"],
+      warnings: [{ part: "documentation", reason: "Describe the input." }],
+    },
+    { checkedParts: [], warnings: [] },
+  ];
+  /**
+   * Replay recheck responses while forwarding ordinary API calls unchanged.
+   * @param path API resource requested by the browser.
+   * @param options Request method and body.
+   */
+  window.fetch = (path, options) => {
+    if (path !== "/api/review/recheck") {
+      return fetch(path, options);
+    }
+    const report = reports.shift();
+    return Promise.resolve(Response.json({ ...report, savedWarnings: report.warnings }));
+  };
+  try {
+    const recheck = document.querySelector(".revision-recheck");
+    const docs = document.querySelector(
+      'section[aria-labelledby="recipe-part-title-documentation"]',
+    );
+    for (const pattern of [/Review warnings appear/u, /None of this revision/u]) {
+      document.querySelector(".revision-trigger").click();
+      clickText(document.querySelector(".revision-menu"), "button", "Re-run LLM review");
+      await eventually(() => pattern.test(recheck.textContent), "recheck summary updated");
+      const warning = docs.querySelector(".file-warnings");
+      assert.equal(warning.hidden, reports.length === 0);
+      if (!warning.hidden) {
+        assert.equal(warning.textContent, "Describe the input.");
+      }
+      clickText(recheck, "button", "Dismiss recheck summary");
+    }
+  } finally {
+    window.fetch = fetch;
+  }
+}
+
+/**
+ * Propose a revision from the published recipe, acknowledge its expected duplicate warning,
+ * and inspect the comparison before returning to the published page.
+ * @param window Maintainer's published recipe page.
+ */
+async function verifyProposalComparison(window) {
+  const { document } = window;
+  const published = window.location.pathname;
+  document.querySelector(".revision-trigger").click();
+  clickText(document.querySelector(".revision-menu"), "a", "Propose an improvement");
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Improve recipe",
+    "prefilled improvement form",
+  );
+  const form = document.querySelector("form.form");
+  assert.ok(form.elements.documentation.value);
+  form.elements.documentation.value =
+    "# Comparison guide\n\nA new usage example for the proposed revision.";
+  form.elements.instructions.value = "";
+  form.requestSubmit();
+  await eventually(
+    () => Boolean(document.querySelector('dialog[aria-labelledby="submission-warning-heading"]')),
+    "duplicate code acknowledgement required",
+  );
+  clickText(document.querySelector("dialog"), "button", "Submit anyway");
+  await eventually(
+    () =>
+      window.location.pathname.startsWith("/recipe/mine/") &&
+      document
+        .querySelector("#recipe-part-content-documentation")
+        ?.textContent.includes("A new usage example"),
+    "proposed draft saved",
+  );
+  const docs = document.querySelector('section[aria-labelledby="recipe-part-title-documentation"]');
+  const navigation = document.querySelector(".recipe-contents");
+  const documentation = [...navigation.querySelectorAll("button")].find(
+    (button) => button.firstChild.textContent === "Documentation",
+  );
+  assert.ok(documentation);
+  documentation.click();
+  assert.equal(document.activeElement.id, "recipe-part-title-documentation");
+  docs.querySelector('button[aria-label="Show changes"]').click();
+  assert.match(docs.textContent, /Compared with base revision/u);
+  assert.match(docs.textContent, /A new usage example/u);
+  docs.querySelector('button[aria-label="Show file"]').click();
+  assert.equal(docs.querySelector("h4").textContent, "Comparison guide");
+  const oldInstructions = document.querySelector("#recipe-part-content-instructions");
+  assert.match(oldInstructions.textContent, /omits this file/u);
+  window.history.go(-2);
+  await eventually(
+    () =>
+      window.location.pathname === published &&
+      document.querySelector(".recipe-byline .state-published"),
+    "back to published recipe",
+  );
+}
+
+/**
  * Exercise review actions and verify publication and quarantine against the fixture database.
  * @param window Maintainer's window showing a pending test revision.
  * @param dispatch Authenticated test transport to verify visibility after a review decision.
@@ -408,6 +512,7 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   );
   clickText(recheck, "button", "Dismiss recheck summary");
   assert.equal(recheck.hidden, true);
+  await verifyRecheckFeedback(window);
   choose("Request changes");
   const reconsider = document.querySelector('dialog[aria-labelledby="revision-action-heading"]');
   assert.equal(reconsider.querySelector("textarea").required, true);
@@ -423,6 +528,7 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   await eventually(() => byline()?.querySelector(".state-published"), "publication shown");
   const query = new URLSearchParams({ slug: draft.slug });
   assert.equal((await dispatch("/api/recipe?" + query, "reader")).status, 200);
+  await verifyProposalComparison(window);
   choose("Quarantine");
   const form = document.querySelector("dialog form");
   form.elements.reason.value = "  ";
@@ -667,6 +773,29 @@ async function verifyMaintainerNavigation(window, dispatch, key) {
 }
 
 /**
+ * Keep legacy links readable and redirect anonymous visitors back to their intended page.
+ * @param dispatch Test transport to the disposable Worker.
+ * @param directory Run directory containing browser coverage results.
+ */
+async function verifySignedOutNavigation(dispatch, directory) {
+  const window = await openPage(dispatch, "/?query=fixture#library", null);
+  try {
+    const { document, location } = window;
+    assert.equal(location.pathname, "/library");
+    assert.equal(location.hash, "");
+    assert.equal(location.search, "?query=fixture");
+    const signin = document.querySelector('#view a[href^="/signin-with-chatgpt?"]');
+    assert.equal(signin.textContent, "Sign in with ChatGPT");
+    assert.equal(new URL(signin.href).searchParams.get("returnTo"), "/library?query=fixture");
+    document.querySelector(".skip").click();
+    assert.equal(document.activeElement.id, "content");
+    await writeFile(join(directory, "browser-anonymous.json"), JSON.stringify(window.__coverage__));
+  } finally {
+    window.close();
+  }
+}
+
+/**
  * Edit the README in a draft, inspect its diff and discard that working copy.
  * @param window Author's initialized recipe test window.
  */
@@ -842,6 +971,7 @@ async function verifyEditorRecovery(window) {
  * @param key Synthetic provider credential already configured in the test Worker.
  */
 export async function exerciseBrowser(dispatch, directory, draft, key) {
+  await verifySignedOutNavigation(dispatch, directory);
   const maintainer = await openPage(dispatch, "/library", "maintainer");
   try {
     await verifyLibrarySearch(maintainer);
