@@ -5,6 +5,9 @@ across ChatGPT, Codex, and other AI tools. Save work from a ChatGPT conversation
 and reuse it in another tool through the Model Context Protocol (MCP). Other connected
 MCP clients can submit recipes for reuse in ChatGPT too.
 
+**Keep Bist private.** Bist is designed for teams of trusted users and agents.
+Avoid public deployments.
+
 Start with [one prompt in ChatGPT Sites](#install-a-private-instance-with-chatgpt-sites).
 Sites hosts Bist, so you don't need to run a server.
 
@@ -41,12 +44,11 @@ revisions. A fresh instance returns an empty list.
 If Sites asks for local source, use the checkout below in the ChatGPT desktop app.
 To join an existing instance, open its URL and sign in with ChatGPT. The operator manages access.
 
-## Choose how to share
+## Share with your team
 
 - **Private team library.** Limit access to your team and set review rules for its coding
   conventions, architecture, and agent instructions. Review instructions before publishing.
-  A malicious recipe could tell any connected agent that reads it to take an unwanted action.
-- **Public reference.** Use a public instance as a wiki for recipes and guides intended for anyone.
+  Agents may act on malicious instructions in recipes they read.
 - **Separate project libraries.** Deploy a Site with its own D1 database for each project.
   Each instance has its own recipes, access settings, and review rules. Install each MCP plugin
   separately and pick it with `@` in ChatGPT or Codex. For example, choose `@mummowiki` or
