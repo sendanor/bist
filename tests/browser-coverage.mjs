@@ -133,6 +133,7 @@ async function verifyAssistant(window) {
   const { document } = window;
   const fetch = window.fetch;
   const sent = [];
+  const interrupted = Promise.withResolvers();
   /**
    * Supply repeatable Assistant replies while forwarding other application traffic.
    * @param path API resource requested by the browser.
@@ -149,6 +150,9 @@ async function verifyAssistant(window) {
     }
     const request = JSON.parse(options.body);
     sent.push(request);
+    if (request.question === "Wait for a response.") {
+      return interrupted.promise;
+    }
     if (sent.length === 2) {
       return Promise.resolve(
         Response.json({ error: "Assistant is temporarily unavailable." }, { status: 503 }),
@@ -287,12 +291,55 @@ async function verifyAssistant(window) {
     assert.ok(Buffer.byteLength(JSON.stringify(history)) <= 12_000);
     assert.equal(history.at(-1).content, "答".repeat(1_200));
     assert.ok(!history.some(({ content }) => content === "Give one example."));
+    form.elements.question.value = "Wait for a response.";
+    form.requestSubmit();
+    form.elements.question.value = "Keep this newer question.";
+    form.requestSubmit();
+    assert.equal(sent.at(-1).question, "Wait for a response.");
+    interrupted.resolve(Response.json({ error: "Delayed response failed." }, { status: 503 }));
+    await eventually(
+      () => form.textContent.includes("Delayed response failed."),
+      "delayed failure has arrived",
+    );
+    assert.equal(form.elements.question.value, "Keep this newer question.");
     toggle.click();
     assert.equal(panel.hidden, true);
     assert.equal(toggle.getAttribute("aria-expanded"), "false");
   } finally {
     window.fetch = fetch;
   }
+}
+
+/**
+ * Offer a way forward for a new library and for an exhausted pagination cursor.
+ * @param window Maintainer's initialized library window.
+ */
+async function verifyEmptyListings(window) {
+  const { document, history, location } = window;
+  const empty = { items: [], previousCursor: null, nextCursor: null };
+  document.querySelector('nav a[href="/mine"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "My revisions",
+    "left the library before reopening it empty",
+  );
+  replyOnce(window, "/api/search", Response.json(empty));
+  document.querySelector('nav a[href="/library"]').click();
+  await eventually(
+    () => Boolean(document.querySelector('#view a[href="/contribute"]')),
+    "empty library offers contribution",
+  );
+  assert.equal(document.querySelector(".recipe"), null);
+  replyOnce(window, "/api/search?cursor=fixture", Response.json(empty));
+  history.pushState(null, "", "/library?cursor=fixture");
+  window.dispatchEvent(new window.PopStateEvent("popstate"));
+  await eventually(
+    () =>
+      [...document.querySelectorAll("#view a")].some((link) => link.textContent === "First page"),
+    "empty page offers to restart pagination",
+  );
+  clickText(document.querySelector("#view"), "a", "First page");
+  await eventually(() => Boolean(document.querySelector(".recipe")), "first page results restored");
+  assert.equal(location.search, "");
 }
 
 /**
@@ -1233,6 +1280,18 @@ async function verifyOpenAiSettings(window, dispatch, key) {
     await eventually(() => modelStatus.textContent.includes(explanation), explanation);
     assert.equal(model.value, "");
   }
+  replyOnce(
+    window,
+    "/api/assistant/models",
+    Response.json({ status: "ready", models: ["gpt-6.2-sol", "other-fixture-model"] }),
+  );
+  clickText(model.form, "button", "Refresh models");
+  await eventually(() => model.value === "gpt-6.2-sol", "recommended model selected from catalog");
+  assert.equal(model.form.querySelector("[type=submit]").disabled, false);
+  model.value = "";
+  model.dispatchEvent(new window.Event("change", { bubbles: true }));
+  reasoning.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(model.form.querySelector("[type=submit]").disabled, true);
   clickText(model.form, "button", "Refresh models");
   await eventually(() => !model.disabled, "catalog refreshed");
   model.form.requestSubmit();
@@ -1412,6 +1471,34 @@ async function verifyMaintainerNavigation(window, dispatch, key) {
   assert.equal(credential.disabled, true);
   assert.ok(credential.form.querySelector('a[href="/settings/llm-review"]'));
   assert.equal(document.querySelector('select[name="model"]').disabled, true);
+  replyOnce(window, "/api/settings/openai", Response.json({ model: null }));
+  replyOnce(
+    window,
+    "/api/settings/llm-review",
+    Response.json({
+      enabled: false,
+      model: "",
+      reasoningEffort: "",
+      referenceQuery: "",
+      referenceLibraryId: "",
+      rules: {},
+    }),
+  );
+  credential.form.querySelector('a[href="/settings/llm-review"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "LLM review",
+    "sparse review settings loaded",
+  );
+  const reviewModel = document.querySelector('input[name="model"]');
+  assert.equal(reviewModel.placeholder, "");
+  assert.equal(reviewModel.value, "");
+  reviewModel.dispatchEvent(new window.Event("input", { bubbles: true }));
+  const rules = [...reviewModel.form.querySelectorAll("fieldset:has(textarea)")];
+  assert.equal(rules.length, 6);
+  for (const rule of rules) {
+    assert.equal(rule.querySelector("select").value, "off");
+    assert.equal(rule.querySelector("textarea").value, "");
+  }
 }
 
 /**
@@ -1715,6 +1802,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
     await verifyLibrarySearch(maintainer);
     verifyNativeLinkHandling(maintainer);
     await verifyListingRace(maintainer);
+    await verifyEmptyListings(maintainer);
     await verifyMaintainerNavigation(maintainer, dispatch, key);
     await verifyAssistantStartup(maintainer);
     await verifyAssistant(maintainer);
