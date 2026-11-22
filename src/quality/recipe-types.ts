@@ -23,13 +23,7 @@ const testLibraries = [
   "/cookbook-node-types/assert/strict.d.ts",
 ];
 
-let cachedLibraries: Map<string, ts.SourceFile>;
-
-/** Load the pinned declaration library texts for the virtual compiler. */
-function loadLibraries() {
-  cachedLibraries ??= new Map();
-  return cachedLibraries;
-}
+const cachedLibraries = new Map<string, ts.SourceFile>();
 
 const extensions: Readonly<Record<string, ts.Extension>> = {
   ".d.ts": ts.Extension.Dts,
@@ -64,13 +58,22 @@ export function checkRecipeTypes(
   limit: number,
   names: Partial<Record<keyof typeof virtualFiles, string>> = {},
 ): string[] {
-  const files = new Map<string, ts.SourceFile>();
+  const files = new Map<string, string>();
+  const parsedFiles = new Map<string, ts.SourceFile>();
   for (const part of Object.keys(virtualFiles) as (keyof typeof virtualFiles)[]) {
     const text = sources[part];
     if (text !== undefined) {
       const name = "/recipe/" + (names[part] ?? virtualFiles[part]);
-      files.set(name, ts.createSourceFile(name, text, ts.ScriptTarget.ES2022, true));
+      files.set(name, text);
     }
+  }
+
+  /**
+   * Read authored or pinned declarations without host filesystem access.
+   * @param name The virtual filename requested by the compiler.
+   */
+  function readFile(name: string) {
+    return files.get(name) ?? libraries[name];
   }
 
   const host: ts.CompilerHost = {
@@ -79,13 +82,13 @@ export function checkRecipeTypes(
      * @param name The absolute virtual filename requested by the compiler.
      */
     getSourceFile(name) {
-      const text = libraries[name];
-      if (text === undefined) {
-        return files.get(name);
-      }
-      const cache = loadLibraries();
+      const cache = files.has(name) ? parsedFiles : cachedLibraries;
       let file = cache.get(name);
       if (!file) {
+        const text = readFile(name);
+        if (text === undefined) {
+          return undefined;
+        }
         file = ts.createSourceFile(name, text, ts.ScriptTarget.ES2022, true);
         cache.set(name, file);
       }
@@ -111,11 +114,7 @@ export function checkRecipeTypes(
      * @param name The virtual filename to check for availability.
      */
     fileExists: (name) => files.has(name) || Object.hasOwn(libraries, name),
-    /**
-     * Read authored or pinned declarations without host filesystem access.
-     * @param name The virtual filename requested by the compiler.
-     */
-    readFile: (name) => files.get(name)?.text ?? libraries[name],
+    readFile,
     /**
      * Resolve permitted imports against the recipe's virtual files and pinned declarations.
      * @param specifiers The import specifiers requested by the compiler.

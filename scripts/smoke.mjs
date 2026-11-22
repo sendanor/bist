@@ -913,6 +913,19 @@ describe("hasFields", () => {
   });
   assert.equal(crossPartMismatch.status, 400);
   assert.match((await crossPartMismatch.json()).error, /tests:1:51.*TS2322/);
+  const referenceFixture = {
+    source:
+      '/// <reference path="./interface.d.ts" />\nimport type { RecipeValue } from "./interface.js";\nexport const result: RecipeValue = "ok";',
+    interface: "export type RecipeValue = string;",
+  };
+  const validReference = await submit("valid-virtual-type-reference", referenceFixture);
+  assert.equal(validReference.status, 201, await validReference.text());
+  const missingReference = await submit("missing-virtual-type-reference", {
+    ...referenceFixture,
+    source: referenceFixture.source.replace("./interface.d.ts", "../package.json"),
+  });
+  assert.equal(missingReference.status, 400);
+  assert.match((await missingReference.json()).error, /TS6053/u);
   const mustBeDocumented = await submit("blocked-warning", {
     source: "export function add() { return 1; }",
   });
