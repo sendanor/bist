@@ -89,6 +89,22 @@ to 20 summaries and accept a `limit` from 1 to 50. To continue, send the returne
 Omit the cursor when changing filters. Listings return metadata only. Use `get_recipe` with
 selected `parts` for file content.
 
+When an LLM review finds a warning, `submit_recipe` pauses before saving the revision.
+The MCP result has `isError: true`, the code `llm_warning`, each affected file part and
+reason, and a `reviewReceipt`. Clients that display plain text receive the same findings
+and receipt. Show every finding to the user and wait for their decision.
+
+- **Correct the files.** Resubmit the corrected snapshot without a receipt. Bist checks
+  changed files covered by the current rules.
+- **Submit with warnings.** After the user explicitly accepts them, repeat the same
+  call with the returned `reviewReceipt`. The receipt expires after ten minutes and
+  applies to that user's submission and warning list. The revision enters human review
+  with those warnings attached.
+
+This also applies to saved warnings that the submitter can see on unchanged files,
+including findings from a maintainer's recheck. Bist can ask for that acknowledgement
+without calling the model. A new **Block** finding requires the affected content to be fixed.
+
 Duplicate checks consider your active revisions and published recipes. Code is compared as a
 whole snapshot, while documentation and agent instructions are checked separately.
 Maintainers can disable, warn on, or block duplicates. Retry with `allowDuplicates: true`
