@@ -17,7 +17,15 @@ import {
   saveMcpSettings,
 } from "./mcp-settings.ts";
 import { searchContext7, searchOpenAiDocs } from "./openai-docs-mcp.ts";
-import { Cookbook, RequestError, str, type Database, type Input } from "./store";
+import { runOpenAiFileEdit } from "./openai-file-edit.ts";
+import {
+  Cookbook,
+  RequestError,
+  str,
+  type Database,
+  type Input,
+  type SubmissionReview,
+} from "./store";
 import {
   fetchOpenAiModelCatalog,
   isOpenAiModel,
@@ -47,6 +55,8 @@ interface Env {
   SETTINGS_ENCRYPTION_KEY?: string;
 }
 const revisionRecheckPath = "/api/review/recheck";
+const fileEditPath = "/api/recipe/file";
+const fileSuggestionPath = fileEditPath + "/suggest";
 const openAiPaths = new Set([
   revisionRecheckPath,
   "/api/assistant",
@@ -784,10 +794,35 @@ export default {
         if (url.pathname === "/api/assistant") {
           return await askAssistant(request, env, cookbook);
         }
-        if (url.pathname === "/api/submit") {
-          const result = await cookbook.submit(await body(request), (candidate) =>
-            reviewSubmission(env.DB, env.SETTINGS_ENCRYPTION_KEY, candidate),
+        if (url.pathname === fileSuggestionPath) {
+          return json(
+            await cookbook.suggestFileEdit(await body(request), async (file, stored) => {
+              if (!stored.credential || !isOpenAiModel(stored.model)) {
+                throw new RequestError("Configure a valid OpenAI connection in Settings.", 503);
+              }
+              const key = await openOpenAiKey(env.SETTINGS_ENCRYPTION_KEY, stored.credential);
+              return runOpenAiFileEdit(
+                {
+                  key,
+                  model: stored.model,
+                  reasoningEffort: effectiveReasoning(stored.model, stored.reasoning_effort),
+                },
+                file,
+              );
+            }),
           );
+        }
+        if (url.pathname === "/api/submit" || url.pathname === fileEditPath) {
+          const input = await body(request);
+          /** Apply current review policy to the normalized files for either submission path.
+           * @param candidate The draft snapshot and any warning receipt supplied by its author.
+           */
+          const review: SubmissionReview = (candidate) =>
+            reviewSubmission(env.DB, env.SETTINGS_ENCRYPTION_KEY, candidate);
+          const result =
+            url.pathname === fileEditPath
+              ? await cookbook.saveFile(input, review)
+              : await cookbook.submit(input, review);
           return json(result, result.editVersion > 0 ? 200 : 201);
         }
         if (url.pathname === revisionRecheckPath) {
@@ -807,7 +842,7 @@ export default {
       return json({ error: "Route not found." }, 404);
     } catch (error) {
       if (
-        openAiPaths.has(url.pathname) &&
+        (openAiPaths.has(url.pathname) || url.pathname === fileSuggestionPath) &&
         !(
           error instanceof RequestError ||
           error instanceof JsonBodyError ||

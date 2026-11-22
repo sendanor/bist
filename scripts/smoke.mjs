@@ -19,6 +19,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Miniflare } from "miniflare";
+import {
+  editToolFixture,
+  verifyFileEditor,
+  verifyFileKinds,
+  verifyOfflineFileEditor,
+} from "../tests/recipe-file-editor.mjs";
 import { getEncoding } from "js-tiktoken";
 import { performance } from "node:perf_hooks";
 
@@ -1507,6 +1513,9 @@ describe("hasFields", () => {
       }
       assert.equal(url.pathname, "/v1/responses");
       const body = await request.json();
+      if (body.tool_choice?.type === "function") {
+        return editToolFixture(body);
+      }
       if (body.text?.format?.name === "recipe_review") {
         llmReviewCalls++;
         assert.equal(body.model, "gpt-6.2-sol");
@@ -1909,6 +1918,8 @@ describe("hasFields", () => {
     question: "Verify reasoning.",
   });
   assert.equal((await reasoningAnswer.json()).answer, "Reasoning fixture passed.");
+  await verifyFileEditor(dispatch, llmRule);
+  await verifyFileKinds(dispatch, tool, namedRef);
   assert.equal((await dispatch("/api/settings/openai", "maintainer", { model })).status, 200);
   const activeSecretsDb = await runtime.getD1Database("DB");
   await activeSecretsDb
@@ -1948,6 +1959,7 @@ describe("hasFields", () => {
     configured: false,
   });
   assert.equal((await dispatch("/api/assistant/models", "maintainer")).status, 503);
+  await verifyOfflineFileEditor(dispatch);
   await verifyReviewOnboarding(dispatch, await runtime.getD1Database("DB"), key);
   console.log(
     JSON.stringify({

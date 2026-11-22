@@ -1,4 +1,5 @@
 import { isArray, isRecord, isRevisionId, isString } from "./guards";
+import { isRecipeFileText, type FileEditRequest } from "./recipe-file.ts";
 import {
   defaultCodePolicy,
   eslintRules,
@@ -76,6 +77,19 @@ type RevisionReview = (
   files: SubmissionSnapshot["files"],
 ) => Promise<RevisionReviewReport>;
 
+/** Server-only configuration for a request authorized against a particular draft. */
+interface StoredOpenAiConnection {
+  readonly model: string;
+  readonly credential: string | null;
+  readonly reasoning_effort: string;
+}
+
+/** Produce a working copy for the editor without changing the stored revision. */
+type SuggestFileEdit = (
+  file: FileEditRequest,
+  connection: StoredOpenAiConnection,
+) => Promise<string>;
+
 type Revision = {
   id: string;
   slug: string;
@@ -128,6 +142,9 @@ const matchingSnapshot = `
 `;
 
 const visibleLlmWarnings = "CASE WHEN author = ? OR ? THEN llm_warnings ELSE '[]' END";
+const editableDraft =
+  "author = ? AND edit_version = ? AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL";
+const replacementConflict = "This draft cannot be replaced. Reload it to check its current status.";
 
 class DuplicateCheck {
   /**
@@ -452,13 +469,14 @@ export class Cookbook {
   /** Load encrypted connection settings for the authorized backend integration. */
   async readOpenAiConnection() {
     this.maintainer();
+    return this.storedConnection();
+  }
+
+  /** Read the encrypted connection after the calling operation has authorized its actor. */
+  private storedConnection() {
     return this.sql(
       "SELECT model, credential, reasoning_effort FROM openai_settings WHERE id = 1",
-    ).first<{
-      model: string;
-      credential: string | null;
-      reasoning_effort: string;
-    }>();
+    ).first<StoredOpenAiConnection>();
   }
 
   /**
@@ -515,9 +533,18 @@ export class Cookbook {
    */
   async reserveOpenAiRequest(action: "settings" | "catalog" | "ask") {
     this.maintainer();
+    await this.reserveProviderQuota(action);
+  }
+
+  /**
+   * Limit an authorized provider operation independently for this verified identity.
+   * @param action The kind of operation, with a separate window for editing files.
+   * @throws {RequestError} When this actor has exhausted the operation's quota.
+   */
+  private async reserveProviderQuota(action: "settings" | "catalog" | "ask" | "file-edit") {
     const result = await this.sql(
       `INSERT INTO openai_rate_limits (actor, action, window, hits)
-       SELECT ?, ?, unixepoch(), 1 WHERE ? = 1
+       VALUES (?, ?, unixepoch(), 1)
        ON CONFLICT(actor, action) DO UPDATE SET
          hits = CASE WHEN openai_rate_limits.window <= excluded.window - 60
                      THEN 1 ELSE openai_rate_limits.hits + 1 END,
@@ -526,8 +553,7 @@ export class Cookbook {
        WHERE openai_rate_limits.window <= excluded.window - 60 OR openai_rate_limits.hits < ?`,
       this.user.id,
       action,
-      this.user.maintainer ? 1 : 0,
-      action === "ask" ? 8 : 12,
+      action === "ask" || action === "file-edit" ? 8 : 12,
     ).run();
     if (!result.meta.changes) {
       throw new RequestError("Too many OpenAI requests. Try again shortly.", 429);
@@ -816,6 +842,84 @@ export class Cookbook {
   }
 
   /**
+   * Resolve the selected file against the author's current editable revision.
+   * @param input The revision, edit version, part and working text supplied by the editor.
+   * @throws {RequestError} When the revision is inaccessible, read-only, stale or the file is invalid.
+   */
+  private async editableFile(input: Input) {
+    const revision = revisionId(input.revision, "revision ID");
+    const version = snapshotVersion(input.editVersion);
+    const recipe = await this.get({ slug: input.slug, revision });
+    if (!recipe.canReplace) {
+      throw new RequestError("Only the author of an editable draft can change its files.", 403);
+    }
+    if (recipe.editVersion !== version) {
+      throw new RequestError(
+        "This draft changed. Reload the revision before editing this file.",
+        409,
+      );
+    }
+    const { part, content } = input;
+    if (!isRecipePart(part) || !Object.hasOwn(recipe.files, part)) {
+      throw new RequestError("Choose a file that exists in this revision.");
+    }
+    if (!isRecipeFileText(content)) {
+      throw new RequestError("Use file contents of at most 12 KB.");
+    }
+    return { recipe, part, content };
+  }
+
+  /**
+   * Save one file through normal submission checks, preserving the rest of the stored draft.
+   * @param input File editor target, replacement text and any explicit warning acknowledgements.
+   * @param review Submission review using the current instance policy.
+   * @throws {RequestError} When the draft is unavailable or a validation or review check rejects it.
+   */
+  async saveFile(input: Input, review: SubmissionReview) {
+    const { recipe, part, content } = await this.editableFile(input);
+    if (!content.trim()) {
+      throw new RequestError("Enter file contents. To remove a file, use Edit draft.");
+    }
+    return this.submit(
+      {
+        slug: recipe.slug,
+        replace: recipe.id,
+        editVersion: recipe.editVersion,
+        title: recipe.title,
+        summary: recipe.summary,
+        tags: recipe.tags,
+        files: { ...recipe.files, [part]: content },
+        fileNames: recipe.fileNames,
+        allowDuplicates: input.allowDuplicates,
+        reviewReceipt: input.reviewReceipt,
+      },
+      review,
+    );
+  }
+
+  /**
+   * Generate an unsaved proposal for one file, checking edit rights before and after inference.
+   * @param input Draft file target, current editor contents and the author's change request.
+   * @param suggest Scoped provider operation that reads and stages only that working copy.
+   * @throws {RequestError} When editing is forbidden, unavailable, stale or rate-limited.
+   */
+  async suggestFileEdit(input: Input, suggest: SuggestFileEdit) {
+    const { recipe, part, content } = await this.editableFile(input);
+    const instruction = str(input.instruction, "an editing instruction", 2_000);
+    const connection = await this.storedConnection();
+    if (!connection?.credential || !connection.model) {
+      throw new RequestError("File suggestions require an OpenAI key and model in Settings.", 503);
+    }
+    await this.reserveProviderQuota("file-edit");
+    const proposal = await suggest(
+      { filename: recipe.fileNames[part]!, content, instruction },
+      connection,
+    );
+    await this.editableFile(input);
+    return { part, editVersion: recipe.editVersion, content: proposal };
+  }
+
+  /**
    * Recheck the stored edit and merge distinct findings into its saved advisory warnings.
    * @param input Slug, revision ID and edit version displayed in the viewer.
    * @param check Evaluate the retrieved files using the current instance policy.
@@ -1029,19 +1133,24 @@ export class Cookbook {
     const normalizedTags = [...new Set(tags.map((tag) => str(tag, "tag", 32).toLowerCase()))];
     const policy = await this.readCodePolicy();
     const parent = replace || base;
+    const parentAccess = replace
+      ? editableDraft
+      : "(state = 'published' OR (state IN ('pending','approved','changes') AND (author = ? OR ?)))";
     const previous = parent
       ? await this.sql(
           `SELECT file_names, files, edit_version, ${visibleLlmWarnings} AS llm_warnings
-           FROM revisions WHERE id = ? AND slug = ?
-       AND (state = 'published' OR (state IN ('pending','approved','changes') AND (author = ? OR ?)))`,
+           FROM revisions WHERE id = ? AND slug = ? AND ${parentAccess}`,
           this.user.id,
           this.user.maintainer,
           parent,
           slug,
           this.user.id,
-          this.user.maintainer,
+          replace ? editVersion : this.user.maintainer,
         ).first<Pick<Revision, "file_names" | "files" | "llm_warnings" | "edit_version">>()
       : null;
+    if (replace && !previous) {
+      throw new RequestError(replacementConflict, 409);
+    }
     const { files, fileNames, warnings } = await this.normalizeSubmission(
       input.files,
       policy,
@@ -1092,8 +1201,7 @@ export class Cookbook {
          SET title = ?, summary = ?, tags = ?, files = ?, file_names = ?, llm_warnings = ?, edit_version = edit_version + 1,
              state = 'pending', review_note = NULL, code_hash = ?, unit_hashes = ?,
              documentation_hash = ?, instructions_hash = ?, fingerprints_ready = 1
-         WHERE id = ? AND slug = ? AND author = ? AND edit_version = ? AND llm_warnings = ?
-           AND state IN ('pending', 'changes') AND published_at IS NULL AND removal_reason IS NULL
+         WHERE id = ? AND slug = ? AND ${editableDraft} AND llm_warnings = ?
            AND NOT EXISTS (${matchingSnapshot})`,
         payload.title,
         payload.summary,
@@ -1111,10 +1219,7 @@ export class Cookbook {
       ).run();
       if (!updated.meta.changes) {
         await this.explainDuplicate(duplicate, replace);
-        throw new RequestError(
-          "This draft cannot be replaced. Reload it to check its current status.",
-          409,
-        );
+        throw new RequestError(replacementConflict, 409);
       }
       return { slug, id: replace, state: "pending", editVersion: editVersion + 1, ...notices };
     }
