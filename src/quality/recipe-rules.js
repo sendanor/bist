@@ -157,7 +157,7 @@ export const recipeRules = {
          * @param node The TypeScript import type and its module reference.
          */
         TSImportType(node) {
-          inspect(node.source ?? node.argument?.literal ?? node.argument);
+          inspect(node.source);
         },
 
         /**
