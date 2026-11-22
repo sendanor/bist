@@ -78,6 +78,54 @@ function clickText(parent, selector, label) {
 }
 
 /**
+ * Return one controlled reply to exercise a browser error without altering the fixture database.
+ * @param window Browser window making the API call.
+ * @param resource Exact same-origin API resource to replace once.
+ * @param response Synthetic response for the chosen request.
+ */
+function replyOnce(window, resource, response) {
+  const fetch = window.fetch;
+  /**
+   * Intercept the selected request and immediately restore regular transport.
+   * @param path Resource requested by the UI.
+   * @param options Original request method, body and signal.
+   */
+  window.fetch = (path, options) => {
+    if (path === resource) {
+      window.fetch = fetch;
+      return Promise.resolve(response);
+    }
+    return fetch(path, options);
+  };
+}
+
+/**
+ * Verify the Assistant reports startup errors and offers configuration after retrying.
+ * @param window Maintainer's existing settings window.
+ */
+async function verifyAssistantStartup(window) {
+  const { document } = window;
+  const panel = document.querySelector("#assistant-panel");
+  replyOnce(
+    window,
+    "/api/assistant",
+    Response.json({ error: "Fixture assistant startup failed." }, { status: 503 }),
+  );
+  document.querySelector("#assistant-toggle").click();
+  await eventually(
+    () => panel.textContent.includes("Fixture assistant startup failed."),
+    "assistant startup failed gracefully",
+  );
+  replyOnce(window, "/api/assistant", Response.json({ configured: false }));
+  clickText(panel, "button", "Retry");
+  await eventually(
+    () => panel.querySelector("#assistant-view a")?.getAttribute("href") === "/settings/openai",
+    "assistant offered OpenAI configuration",
+  );
+  document.querySelector("#assistant-close").click();
+}
+
+/**
  * Check Assistant exchanges, reference fields, failure recovery and retained panel state.
  * @param window Maintainer's application window.
  */
@@ -627,7 +675,28 @@ async function verifyMcpSettings(window, dispatch) {
   const form = document.querySelector("#view form");
   const status = form.querySelector('[role="status"]');
   const enabled = form.elements.enabled;
+  replyOnce(
+    window,
+    "/api/settings/mcp/check",
+    Response.json({ error: "Fixture tool discovery interrupted." }, { status: 503 }),
+  );
+  clickText(form, "button", "Check tool list");
+  await eventually(
+    () => status.textContent === "Could not check the MCP tool list.",
+    "tool discovery failed gracefully",
+  );
   enabled.checked = false;
+  replyOnce(
+    window,
+    "/api/settings/mcp",
+    Response.json({ error: "Fixture MCP save interrupted." }, { status: 503 }),
+  );
+  form.requestSubmit();
+  await eventually(
+    () => status.textContent === "Fixture MCP save interrupted.",
+    "tool configuration failure shown",
+  );
+  assert.equal(enabled.checked, false);
   form.requestSubmit();
   await eventually(() => status.textContent === "MCP settings saved.", "saved paused MCP instance");
   clickText(form, "button", "Check tool list");
@@ -657,6 +726,17 @@ async function verifyMcpSettings(window, dispatch) {
       (row) => row.querySelector("strong").textContent === name,
     );
     const checkbox = addOn.querySelector("input");
+    const saved = checkbox.checked;
+    replyOnce(
+      window,
+      "/api/settings/mcp/" + path,
+      Response.json({ error: "Fixture add-on was unavailable." }, { status: 503 }),
+    );
+    checkbox.click();
+    await eventually(
+      () => !fields.disabled && checkbox.checked === saved,
+      "failed add-on switch restored",
+    );
     for (const expected of [!checkbox.checked, checkbox.checked]) {
       checkbox.click();
       await eventually(() => !fields.disabled, "saved " + name);
@@ -696,13 +776,44 @@ async function verifyOpenAiSettings(window, dispatch, key) {
   const reasoning = model.form.elements.reasoningEffort;
   assert.equal(credential.value, "");
   await eventually(() => !model.disabled, "catalog populated");
+  for (const [reply, explanation] of [
+    [Response.json({ status: "unauthorized", models: [] }), "This API key cannot list models."],
+    [Response.json({ status: "unavailable", models: [] }), "Could not load the model catalog."],
+    [
+      Response.json({ error: "Fixture catalog gateway unavailable." }, { status: 503 }),
+      "Fixture catalog gateway unavailable.",
+    ],
+    [
+      Response.json({ status: "ready", models: ["other-fixture-model"] }),
+      "The configured model is missing",
+    ],
+  ]) {
+    replyOnce(window, "/api/assistant/models", reply);
+    clickText(model.form, "button", "Refresh models");
+    await eventually(() => modelStatus.textContent.includes(explanation), explanation);
+    assert.equal(model.value, "");
+  }
   clickText(model.form, "button", "Refresh models");
   await eventually(() => !model.disabled, "catalog refreshed");
+  model.form.requestSubmit();
+  assert.equal(modelStatus.textContent, "");
   model.value = "gpt-6-luna";
   model.dispatchEvent(new window.Event("change", { bubbles: true }));
   assert.ok([...reasoning.options].some((option) => option.value === "none"));
   reasoning.value = "none";
   reasoning.dispatchEvent(new window.Event("change", { bubbles: true }));
+  replyOnce(
+    window,
+    "/api/settings/openai",
+    Response.json({ error: "Fixture model save interrupted." }, { status: 503 }),
+  );
+  model.form.requestSubmit();
+  await eventually(
+    () => modelStatus.textContent === "Fixture model save interrupted.",
+    "model save failure shown",
+  );
+  assert.equal(model.value, "gpt-6-luna");
+  assert.equal(reasoning.value, "none");
   model.form.requestSubmit();
   await eventually(
     () => modelStatus.textContent === "OpenAI model saved.",
@@ -722,6 +833,20 @@ async function verifyOpenAiSettings(window, dispatch, key) {
   clickText(keyForm, "button", "Cancel");
   assert.match(keyStatus.textContent, /valid OpenAI API key/u);
   clickText(keyForm, "button", "Remove API key");
+  replyOnce(
+    window,
+    "/api/settings/openai/remove-key",
+    Response.json({ error: "Fixture key removal interrupted." }, { status: 503 }),
+  );
+  clickText(keyForm, "button", "Confirm removal");
+  await eventually(
+    () => keyStatus.textContent === "Fixture key removal interrupted.",
+    "credential removal failure shown",
+  );
+  assert.equal(
+    (await (await dispatch("/api/settings/openai", "maintainer")).json()).hasCredential,
+    true,
+  );
   clickText(keyForm, "button", "Confirm removal");
   await eventually(() => keyStatus.textContent === "OpenAI API key removed.", "cleared credential");
   assert.equal(model.disabled, true);
@@ -1090,6 +1215,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
   try {
     await verifyLibrarySearch(maintainer);
     await verifyMaintainerNavigation(maintainer, dispatch, key);
+    await verifyAssistantStartup(maintainer);
     await verifyAssistant(maintainer);
     assert.ok(maintainer.__coverage__["src/browser.js"]);
     await writeFile(
