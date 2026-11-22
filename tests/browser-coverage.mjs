@@ -550,6 +550,8 @@ async function verifyContribution(window) {
   assert.equal(suggestions.querySelector('option[value="paging"]').disabled, true);
   paging.click();
   assert.equal(suggestions.querySelector('option[value="paging"]').disabled, false);
+  suggestions.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(form.querySelector('button[aria-label="Remove tag paging"]'), null);
   entry.value = "one,two,three,four,five,six,seven,eight,nine";
   clickText(form, "button", "Add tags");
   assert.match(entry.validationMessage, /eight tags/u);
@@ -561,6 +563,15 @@ async function verifyContribution(window) {
   assert.equal(entry.validity.valid, false);
   form.querySelector('button[aria-label="Remove tag arrays"]').click();
   form.elements.tagEntry.value = " VALIDATION, validation, ";
+  const composing = new window.KeyboardEvent("keydown", {
+    key: "Enter",
+    isComposing: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  entry.dispatchEvent(composing);
+  assert.equal(composing.defaultPrevented, false);
+  assert.equal(form.querySelector('button[aria-label="Remove tag validation"]'), null);
   form.elements.tagEntry.dispatchEvent(
     new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
   );
@@ -1037,6 +1048,16 @@ async function verifyReviewDecisions(window, dispatch, draft) {
     document.querySelector(".revision-trigger").click();
     clickText(document.querySelector(".revision-menu"), "button", label);
   }
+  const trigger = document.querySelector(".revision-trigger");
+  trigger.click();
+  const menu = document.querySelector(".revision-menu");
+  assert.ok(menu.contains(document.activeElement));
+  menu.firstElementChild.dispatchEvent(
+    new window.FocusEvent("focusout", { relatedTarget: trigger, bubbles: true }),
+  );
+  assert.equal(menu.hidden, false);
+  trigger.click();
+  assert.equal(menu.hidden, true);
   choose("Re-run LLM review");
   const recheck = document.querySelector(".revision-recheck");
   await eventually(
@@ -1049,6 +1070,7 @@ async function verifyReviewDecisions(window, dispatch, draft) {
   choose("Request changes");
   const reconsider = document.querySelector('dialog[aria-labelledby="revision-action-heading"]');
   assert.equal(reconsider.querySelector("textarea").required, true);
+  assert.equal(reconsider.dispatchEvent(new window.Event("cancel", { cancelable: true })), true);
   clickText(reconsider, "button", "Cancel");
   assert.ok(!reconsider.isConnected);
   choose("Approve revision");
@@ -1294,6 +1316,9 @@ async function verifyOpenAiSettings(window, dispatch, key) {
   assert.equal(model.form.querySelector("[type=submit]").disabled, true);
   clickText(model.form, "button", "Refresh models");
   await eventually(() => !model.disabled, "catalog refreshed");
+  model.dispatchEvent(new window.Event("change", { bubbles: true }));
+  reasoning.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(model.form.querySelector("[type=submit]").disabled, true);
   model.form.requestSubmit();
   assert.equal(modelStatus.textContent, "");
   model.value = "gpt-6-luna";
@@ -1366,6 +1391,53 @@ async function verifyOpenAiSettings(window, dispatch, key) {
   assert.equal(credential.value, "");
   assert.equal(model.value, "gpt-6-luna");
   assert.equal(reasoning.value, "none");
+  await verifyOpenAiSettingsRaces(window, settings, key);
+}
+
+/**
+ * Ignore a catalog or model write reply superseded by a successful credential refresh.
+ * @param window Maintainer's initialized OpenAI settings view.
+ * @param settings Saved metadata that a fresh credential request would return.
+ * @param key Synthetic credential accepted by the test instance.
+ */
+async function verifyOpenAiSettingsRaces(window, settings, key) {
+  const { document } = window;
+  const credential = document.querySelector('input[name="apiKey"]');
+  const model = document.querySelector('select[name="model"]');
+  const status = model.form.querySelector('[role="status"]');
+  for (const [operation, response] of [
+    ["catalog", Response.json({ error: "The old catalog request failed." }, { status: 503 })],
+    ["save", Response.json({ ...settings, model: "gpt-6.2-sol", reasoningEffort: "low" })],
+    ["save", Response.json({ error: "The old model save failed." }, { status: 503 })],
+  ]) {
+    const stale = Promise.withResolvers();
+    if (operation === "catalog") {
+      replyOnce(window, "/api/assistant/models", stale.promise);
+      clickText(model.form, "button", "Refresh models");
+    } else {
+      model.value = "gpt-6.2-sol";
+      model.dispatchEvent(new window.Event("change"));
+      assert.equal(model.form.querySelector("[type=submit]").disabled, false);
+      replyOnce(window, "/api/settings/openai", stale.promise);
+      model.form.requestSubmit();
+    }
+    assert.equal(model.disabled, true);
+    replyOnce(
+      window,
+      "/api/assistant/models",
+      Response.json({ status: "ready", models: ["gpt-6-luna", "gpt-6.2-sol"] }),
+    );
+    replyOnce(window, "/api/settings/openai", Response.json(settings));
+    credential.value = key;
+    credential.form.requestSubmit();
+    await eventually(() => !model.disabled, "new key response loaded a fresh catalog");
+    stale.resolve(response);
+    await setTimeout(0);
+    assert.equal(status.textContent, "");
+    assert.equal(model.value, "gpt-6-luna");
+    assert.equal(model.form.elements.reasoningEffort.value, "none");
+    assert.equal(model.form.querySelector("[type=submit]").disabled, true);
+  }
 }
 
 /**
