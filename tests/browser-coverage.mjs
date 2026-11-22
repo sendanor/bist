@@ -81,7 +81,7 @@ function clickText(parent, selector, label) {
  * Return one controlled reply to exercise a browser error without altering the fixture database.
  * @param window Browser window making the API call.
  * @param resource Exact same-origin API resource to replace once.
- * @param response Synthetic response for the chosen request.
+ * @param response Synthetic response or a promise controlled by the test.
  */
 function replyOnce(window, resource, response) {
   const fetch = window.fetch;
@@ -154,9 +154,13 @@ async function verifyAssistant(window) {
         Response.json({ error: "Assistant is temporarily unavailable." }, { status: 503 }),
       );
     }
+    let answer = sent.length === 1 ? "This is the first reply." : "This is the follow-up.";
+    if (sent.length > 3) {
+      answer = "答".repeat(1_200) + sent.length;
+    }
     return Promise.resolve(
       Response.json({
-        answer: sent.length === 1 ? "This is the first reply." : "This is the follow-up.",
+        answer,
         sources:
           sent.length === 1
             ? [
@@ -262,10 +266,61 @@ async function verifyAssistant(window) {
     toggle.click();
     assert.equal(form.elements.question.value, "A draft that survives closing.");
     assert.match(panel.textContent, /This is the follow-up/u);
+    for (let index = 0; index < 4; index++) {
+      form.elements.question.value = "問".repeat(1_000) + index;
+      form.requestSubmit();
+      await eventually(
+        () => panel.textContent.includes("答".repeat(30) + sent.length),
+        "long reply included in the ongoing chat",
+      );
+    }
+    const history = sent.at(-1).history;
+    assert.ok(history.length > 0 && history.length < 8);
+    assert.ok(Buffer.byteLength(JSON.stringify(history)) <= 12_000);
+    assert.equal(history.at(-1).content, "答".repeat(1_200));
+    assert.ok(!history.some(({ content }) => content === "Give one example."));
     document.querySelector("#assistant-close").click();
   } finally {
     window.fetch = fetch;
   }
+}
+
+/**
+ * Keep an outdated library failure from replacing the next page, and let a current failure retry.
+ * @param window Maintainer's initialized library window.
+ */
+async function verifyListingRace(window) {
+  const { document, location } = window;
+  const search = document.querySelector("form.search");
+  const late = Promise.withResolvers();
+  replyOnce(window, "/api/search?query=outdated", late.promise);
+  search.elements.query.value = "outdated";
+  search.requestSubmit();
+  assert.equal(location.search, "?query=outdated");
+  document.querySelector('nav a[href="/mine"]').click();
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "My revisions",
+    "personal drafts are visible while the previous search is pending",
+  );
+  late.resolve(Response.json({ error: "Outdated search failed." }, { status: 503 }));
+  await setTimeout(0);
+  assert.equal(document.querySelector("#view h1")?.textContent, "My revisions");
+  assert.doesNotMatch(document.querySelector("#view").textContent, /Outdated search failed/u);
+  replyOnce(
+    window,
+    "/api/search",
+    Response.json({ error: "Current search failed." }, { status: 503 }),
+  );
+  document.querySelector('nav a[href="/library"]').click();
+  await eventually(
+    () => document.querySelector("#view").textContent.includes("Current search failed."),
+    "current library failure is shown",
+  );
+  clickText(document.querySelector("#view"), "button", "Retry");
+  await eventually(
+    () => document.querySelector("#view h1")?.textContent === "Recipe library",
+    "retry restored the library",
+  );
 }
 
 /**
@@ -639,6 +694,44 @@ async function verifyHistoricalComments(window, dispatch) {
     file.querySelector("#recipe-part-content-instructions").textContent,
     /omits this file/u,
   );
+  const pending = Promise.withResolvers();
+  const { document } = window;
+  const fetch = window.fetch;
+  /**
+   * Hold delivery of the real action result until navigation has moved to the library.
+   * @param url API path supplied by the revision toolbar.
+   * @param options Request body and method for the action.
+   */
+  window.fetch = async (url, options) => {
+    const response = await fetch(url, options);
+    if (url === "/api/action") {
+      await pending.promise;
+    }
+    return response;
+  };
+  try {
+    document.querySelector(".revision-trigger").click();
+    clickText(document.querySelector(".revision-menu"), "button", "Request changes");
+    const form = document.querySelector("dialog form");
+    form.elements.reason.value = "Follow up on the original review comment.";
+    form.requestSubmit();
+    document.querySelector('nav a[href="/library"]').click();
+    await eventually(
+      () => view.querySelector("h1")?.textContent === "Recipe library",
+      "opened library while action acknowledgement is pending",
+    );
+    const notice = document.querySelector("#notice").textContent;
+    pending.resolve();
+    await eventually(() => !form.closest("dialog").open, "revision action acknowledged");
+    assert.equal(view.querySelector("h1")?.textContent, "Recipe library");
+    assert.equal(document.querySelector("#notice").textContent, notice);
+    const query = new URLSearchParams({ slug: recipe.slug, revision: id });
+    const saved = await dispatch("/api/recipe?" + query, actor);
+    assert.equal((await saved.json()).state, "changes");
+  } finally {
+    pending.resolve();
+    window.fetch = fetch;
+  }
 }
 
 /**
@@ -1094,9 +1187,16 @@ async function verifyOpenAiSettings(window, dispatch, key) {
     (await (await dispatch("/api/settings/openai", "maintainer")).json()).hasCredential,
     true,
   );
+  const stale = Promise.withResolvers();
+  replyOnce(window, "/api/assistant/models", stale.promise);
+  clickText(model.form, "button", "Refresh models");
+  assert.equal(model.disabled, true);
   clickText(keyForm, "button", "Confirm removal");
   await eventually(() => keyStatus.textContent === "OpenAI API key removed.", "cleared credential");
+  stale.resolve(Response.json({ status: "ready", models: ["outdated-fixture-model"] }));
+  await setTimeout(0);
   assert.equal(model.disabled, true);
+  assert.equal(model.querySelector('option[value="outdated-fixture-model"]'), null);
   assert.equal(modelStatus.textContent, "Save an API key to load the model list.");
   credential.value = key;
   keyForm.requestSubmit();
@@ -1492,6 +1592,7 @@ export async function exerciseBrowser(dispatch, directory, draft, key) {
   const maintainer = await openPage(dispatch, "/library", "maintainer");
   try {
     await verifyLibrarySearch(maintainer);
+    await verifyListingRace(maintainer);
     await verifyMaintainerNavigation(maintainer, dispatch, key);
     await verifyAssistantStartup(maintainer);
     await verifyAssistant(maintainer);
