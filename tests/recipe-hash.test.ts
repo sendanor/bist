@@ -50,3 +50,28 @@ test("prose normalizes line endings but keeps Markdown indentation", async () =>
   );
   assert.equal(formatted.snapshot, null);
 });
+
+test("fingerprints TypeScript angle-bracket assertions as code", async () => {
+  const cast = await fingerprintRecipe({ source: 'const message = <string>"hello";' });
+  const reformatted = await fingerprintRecipe({ source: 'const message=<string> "hello"' });
+  const different = await fingerprintRecipe({ source: 'const message = <unknown>"hello";' });
+  assert.equal(cast.snapshot, reformatted.snapshot);
+  assert.notEqual(cast.snapshot, different.snapshot);
+});
+
+test("includes compiler directives and reports blank content as absent", async () => {
+  const plain = "export const message = 1;";
+  const ordinary = await fingerprintRecipe({ source: "// An ordinary comment.\n" + plain });
+  const directed = await fingerprintRecipe({ source: "// @ts-nocheck\n" + plain });
+  assert.equal(ordinary.snapshot, (await fingerprintRecipe({ source: plain })).snapshot);
+  assert.notEqual(directed.snapshot, ordinary.snapshot);
+  assert.deepEqual(
+    await fingerprintRecipe({ source: " \n", documentation: " ", instructions: "" }),
+    {
+      snapshot: null,
+      units: {},
+      documentation: null,
+      instructions: null,
+    },
+  );
+});
