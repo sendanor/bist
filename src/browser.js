@@ -1244,6 +1244,7 @@ function reviewCommentText(comment) {
  */
 function fileSection(recipe, key, value, previous, hasBase) {
   const name = parts[key];
+  const warnings = fileWarnings(key);
   const prose = key === "documentation" || key === "instructions";
   const partIcon = {
     documentation: "doc",
@@ -1363,6 +1364,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
   return {
     heading,
     name,
+    warnings,
     section: el(
       "section",
       { className: "panel recipe-part", "aria-labelledby": heading.id },
@@ -1377,7 +1379,7 @@ function fileSection(recipe, key, value, previous, hasBase) {
         copy,
         status,
       ),
-      el("div", {}, feedback, area, earlierComments(earlier)),
+      el("div", {}, warnings.list, feedback, area, earlierComments(earlier)),
     ),
   };
 }
@@ -1400,20 +1402,33 @@ function fileViewer(recipe, base) {
   const navigate = el(
     "nav",
     { className: "recipe-contents", "aria-label": t("recipe-sections") },
-    ...files.map(({ heading, name }) =>
-      btn(name, () => {
+    ...files.map(({ heading, name, warnings }) => {
+      const button = btn(name, () => {
         heading.focus({ preventScroll: true });
         heading.scrollIntoView({ block: "start" });
-      }),
-    ),
+      });
+      button.append(warnings.marker);
+      return button;
+    }),
   );
-  return el(
+  const view = el(
     "section",
     { className: "section file-viewer", "aria-labelledby": "recipe-files-heading" },
     el("h2", { id: "recipe-files-heading", className: "visually-hidden" }, t("recipe-files")),
     navigate,
     ...files.map(({ section }) => section),
   );
+  /**
+   * Update findings in place so reading position and open comment forms are preserved.
+   * @param findings All saved findings visible to this viewer for the selected edit.
+   */
+  function showWarnings(findings) {
+    for (const { warnings } of files) {
+      warnings.update(findings);
+    }
+  }
+  showWarnings(recipe.llmWarnings ?? []);
+  return { view, showWarnings };
 }
 const actionReasons = {
   approve: { label: t("optional-review-note"), required: false },
@@ -1428,27 +1443,31 @@ const actionDescriptions = {
 };
 
 /**
- * Show saved findings from submission and later rechecks beside their filenames.
- * @param recipe Stored revision with filenames and any warnings visible to the viewer.
+ * Mark an affected file in section navigation and display each warning above its content.
+ * @param part Recipe file part whose findings belong in this section.
  */
-function revisionWarnings(recipe) {
-  const heading = el("h2", { id: "revision-warnings-heading" }, t("llm-review-saved-warnings"));
-  const list = el("ul");
-  const view = el("section", { className: "panel", "aria-labelledby": heading.id }, heading, list);
+function fileWarnings(part) {
+  const label = t("llm-review-warnings");
+  const marker = el(
+    "span",
+    { className: "file-warning-marker", hidden: "", title: label },
+    icon("warning"),
+    el("span", { className: "visually-hidden" }, " " + label),
+  );
+  const list = el("ul", { className: "file-warnings", hidden: "", "aria-label": label });
   /**
-   * Display the saved warnings returned for this edit and hide the section when empty.
-   * @param warnings All findings visible to the viewer on the selected revision.
+   * Keep the section marker and inline warning text in sync after a recheck.
+   * @param findings Saved findings for the current revision.
    */
-  function update(warnings) {
+  function update(findings) {
+    const warnings = findings.filter((finding) => finding.part === part);
     list.replaceChildren(
-      ...warnings.map(({ part, reason }) =>
-        el("li", {}, el("strong", {}, recipe.fileNames?.[part] ?? parts[part]), " — ", reason),
-      ),
+      ...warnings.map(({ reason }) => el("li", {}, icon("warning"), el("span", {}, reason))),
     );
-    view.hidden = !warnings.length;
+    list.hidden = !warnings.length;
+    marker.hidden = list.hidden;
   }
-  update(recipe.llmWarnings ?? []);
-  return { view, update };
+  return { list, marker, update };
 }
 
 /**
@@ -1470,7 +1489,7 @@ function revisionRecheck(recipe, showWarnings) {
   });
   const view = el(
     "section",
-    { hidden: "", className: "panel revision-recheck", "aria-labelledby": heading.id },
+    { hidden: "", className: "revision-recheck", "aria-labelledby": heading.id },
     el("div", { className: "recheck-heading" }, heading, dismiss),
     status,
     details,
@@ -1766,8 +1785,8 @@ async function recipePage(section, slug, revision) {
     }
   }
   recentRecipe = recipe;
-  const warnings = revisionWarnings(recipe);
-  const recheck = maintainer ? revisionRecheck(recipe, warnings.update) : null;
+  const files = fileViewer(recipe, base);
+  const recheck = maintainer ? revisionRecheck(recipe, files.showWarnings) : null;
   const filters = new URL(listingPaths.get(section) ?? "/" + section, location.origin).searchParams;
   return {
     actions: revisionControls(recipe, section, recheck?.run),
@@ -1794,8 +1813,7 @@ async function recipePage(section, slug, revision) {
       recipe.review_note && el("p", { className: "panel" }, recipe.review_note),
       recipe.removal_reason &&
         el("p", { className: "panel" }, t("removal-requested") + recipe.removal_reason),
-      warnings.view,
-      fileViewer(recipe, base),
+      files.view,
       el(
         "dl",
         { className: "revision-meta" },

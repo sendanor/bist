@@ -1144,6 +1144,45 @@ main,
   background: #efedff;
 }
 
+.file-warning-marker,
+.file-warnings {
+  color: #804600;
+}
+
+.file-warning-marker {
+  display: inline-flex;
+  margin-inline-start: 5px;
+}
+
+.file-warnings {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.file-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.file-warnings li + li {
+  margin-top: 6px;
+}
+
+.file-warnings .ui-icon,
+.file-warning-marker .ui-icon {
+  flex: none;
+  width: 1em;
+  height: 1em;
+}
+
+.file-warnings .ui-icon {
+  margin-top: 0.25em;
+}
+
 .recipe-part {
   min-width: 0;
   margin-bottom: 14px;
